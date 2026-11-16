@@ -4,11 +4,11 @@ if (session_status() === PHP_SESSION_NONE) {
 }
 
 // Otomatis membaca konfigurasi dari Railway atau fallback ke localhost jika dibuka di laptop
-$host = getenv('MYSQLHOST') ?: 'localhost';
-$user = getenv('MYSQLUSER') ?: 'root';
-$pass = getenv('MYSQLPASSWORD') ?: '';
-$db   = getenv('MYSQLDATABASE') ?: 'marketiva';
-$port = getenv('MYSQLPORT') ?: '3306';
+$host = 'localhost';
+$user = 'root';
+$pass =  '';
+$db   =  'db_marketiva';
+$port = '3306';
 
 $conn = mysqli_connect($host, $user, $pass, $db, $port);
 

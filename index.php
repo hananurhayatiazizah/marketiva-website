@@ -286,6 +286,11 @@ $settings = mysqli_fetch_assoc(mysqli_query($conn, "SELECT * FROM website_settin
           <span class="material-symbols-outlined text-[18px]">grid_view</span>
           <span>Catalog Layanan</span>
         </a>
+
+        <a class="hover:text-[#E11D48] transition-colors flex items-center gap-1.5" href="article.php">
+          <span class="material-symbols-outlined text-[18px]">grid_view</span>
+          <span>Article</span>
+        </a>
       </nav>
 
       <!-- DINAMIS: TOMBOL MASUK ATAU STATUS AKUN AKTIF -->

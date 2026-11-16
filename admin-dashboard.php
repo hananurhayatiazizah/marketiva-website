@@ -149,7 +149,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action_update_about']
     }
 }
 
-// 7. PROSES TAMBAH / EDIT HERO SLIDE[cite: 3, 6]
+// 7. PROSES TAMBAH / EDIT HERO SLIDE[cite: 3]
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action_save_slide'])) {
     $slide_id  = intval($_POST['slide_id'] ?? 0);
     $badge     = trim($_POST['badge'] ?? '');
@@ -228,6 +228,66 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action_save_cta'])) {
     }
 }
 
+// 11. PROSES TAMBAH ARTIKEL (REVISI: UPLOAD GAMBAR, KALENDER, & SLUG URL)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action_tambah_artikel'])) {
+    $title    = trim($_POST['title'] ?? '');
+    $category = trim($_POST['category'] ?? '');
+    $date     = trim($_POST['date'] ?? '');
+    $excerpt  = trim($_POST['excerpt'] ?? '');
+    
+    // Simpan URL artikel apa adanya jika berupa link, atau buat slug otomatis jika kosong
+    $input_slug = trim($_POST['slug'] ?? '');
+    if (!empty($input_slug)) {
+        if (strpos($input_slug, 'http://') === 0 || strpos($input_slug, 'https://') === 0) {
+            $slug = $input_slug;
+        } elseif (strpos($input_slug, '.') !== false || strpos($input_slug, '/') !== false) {
+            $slug = 'https://' . ltrim($input_slug, '/');
+        } else {
+            $slug = strtolower(trim(preg_replace('/[^A-Za-z0-9-]+/', '-', $input_slug), '-'));
+        }
+    } else {
+        $slug = strtolower(trim(preg_replace('/[^A-Za-z0-9-]+/', '-', $title), '-'));
+    }
+
+    $image_path = 'uploads/default-article.jpg';
+
+    // Proses upload file gambar dari komputer
+    if (isset($_FILES['image_file']) && $_FILES['image_file']['error'] === UPLOAD_ERR_OK) {
+        $file_tmp   = $_FILES['image_file']['tmp_name'];
+        $file_name  = time() . '_' . basename($_FILES['image_file']['name']);
+        $upload_dir = 'uploads/';
+
+        if (!is_dir($upload_dir)) {
+            mkdir($upload_dir, 0777, true);
+        }
+
+        $target_file = $upload_dir . $file_name;
+        if (move_uploaded_file($file_tmp, $target_file)) {
+            $image_path = $target_file;
+        }
+    }
+
+    if (!empty($title) && !empty($excerpt)) {
+        $stmt_art = $conn->prepare("INSERT INTO articles (title, category, date, excerpt, image, slug) VALUES (?, ?, ?, ?, ?, ?)");
+        $stmt_art->bind_param("ssssss", $title, $category, $date, $excerpt, $image_path, $slug);
+        $stmt_art->execute();
+        $stmt_art->close();
+        $msg_success = "Artikel berhasil dipublikasikan dengan URL slug: $slug!";
+        recordLog($conn, $admin_name, "Menambahkan artikel baru: $title");
+    } else {
+        $msg_error = "Judul dan ringkasan artikel wajib diisi!";
+    }
+}
+
+// 12. PROSES HAPUS ARTIKEL
+if (isset($_GET['delete_article'])) {
+    $id_art = intval($_GET['delete_article']);
+    mysqli_query($conn, "DELETE FROM articles WHERE id = $id_art");
+    recordLog($conn, $admin_name, "Menghapus artikel ID #$id_art");
+    header("Location: admin-dashboard.php");
+    exit();
+}
+
 $count_services = mysqli_fetch_assoc(mysqli_query($conn, "SELECT COUNT(*) as total FROM services"))['total'] ?? 0;
 $count_users    = mysqli_fetch_assoc(mysqli_query($conn, "SELECT COUNT(*) as total FROM users WHERE role = 'user'"))['total'] ?? 0;
 $count_orders   = mysqli_fetch_assoc(mysqli_query($conn, "SELECT COUNT(*) as total FROM orders"))['total'] ?? 0;
@@ -242,6 +302,7 @@ $about_data = mysqli_fetch_assoc(mysqli_query($conn, "SELECT * FROM about_us WHE
 $slides_res  = mysqli_query($conn, "SELECT * FROM hero_slides ORDER BY id DESC");
 $paket_res   = mysqli_query($conn, "SELECT * FROM paket_harga ORDER BY id ASC");
 $cta_data    = mysqli_fetch_assoc(mysqli_query($conn, "SELECT * FROM cta_banner WHERE id = 1")) ?? ['badge' => '', 'judul' => '', 'deskripsi' => ''];
+$articles_res = mysqli_query($conn, "SELECT * FROM articles ORDER BY id DESC");
 ?>
 <!DOCTYPE html>
 <html lang="id">
@@ -353,14 +414,19 @@ $cta_data    = mysqli_fetch_assoc(mysqli_query($conn, "SELECT * FROM cta_banner 
             <span class="material-symbols-outlined text-[20px]">view_carousel</span> Hero Slides Beranda
           </button>
 
-          <!-- TAB KELOLA PAKET HARGA (BARU) -->
+          <!-- TAB KELOLA PAKET HARGA -->
           <button onclick="switchAdminTab('paket')" id="btnTabPaket" class="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-50 transition-all">
             <span class="material-symbols-outlined text-[20px]">payments</span> Kelola Paket Harga
           </button>
 
-          <!-- TAB KELOLA BANNER CTA (BARU) -->
+          <!-- TAB KELOLA BANNER CTA -->
           <button onclick="switchAdminTab('cta')" id="btnTabCta" class="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-50 transition-all">
             <span class="material-symbols-outlined text-[20px]">campaign</span> Kelola Banner CTA
+          </button>
+
+          <!-- TAB KELOLA ARTIKEL & TIPS (REVISI) -->
+          <button onclick="switchAdminTab('articles')" id="btnTabArticles" class="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-50 transition-all">
+            <span class="material-symbols-outlined text-[20px]">article</span> Kelola Artikel
           </button>
 
           <!-- TAB KELOLA TENTANG KAMI -->
@@ -380,6 +446,9 @@ $cta_data    = mysqli_fetch_assoc(mysqli_query($conn, "SELECT * FROM cta_banner 
           </a>
           <a href="catalog.php" target="_blank" class="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold text-blue-600 hover:bg-blue-50 transition-all">
             <span class="material-symbols-outlined text-[20px]">open_in_new</span> Pratinjau Katalog
+          </a>
+          <a href="article.php" target="_blank" class="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold text-rose-600 hover:bg-rose-50 transition-all">
+            <span class="material-symbols-outlined text-[20px]">article</span> Pratinjau Artikel
           </a>
           <a href="about.php" target="_blank" class="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold text-indigo-600 hover:bg-indigo-50 transition-all">
             <span class="material-symbols-outlined text-[20px]">visibility</span> Pratinjau Tentang Kami
@@ -592,7 +661,7 @@ $cta_data    = mysqli_fetch_assoc(mysqli_query($conn, "SELECT * FROM cta_banner 
           </div>
         </div>
 
-        <!-- TAB KELOLA HERO SLIDES BERANDA[cite: 3, 6] -->
+        <!-- TAB KELOLA HERO SLIDES BERANDA -->
         <div id="adminTabSlides" class="card-studio space-y-6 hidden">
           <div class="border-b border-slate-100 pb-4">
             <h2 class="text-xl font-extrabold text-slate-900">Kelola Hero Slide Banner (Beranda)</h2>
@@ -657,7 +726,7 @@ $cta_data    = mysqli_fetch_assoc(mysqli_query($conn, "SELECT * FROM cta_banner 
           </div>
         </div>
 
-        <!-- TAB KELOLA PAKET HARGA (BARU) -->
+        <!-- TAB KELOLA PAKET HARGA -->
         <div id="adminTabPaket" class="card-studio space-y-6 hidden">
           <div class="border-b border-slate-100 pb-4">
             <h2 class="text-xl font-extrabold text-slate-900">Kelola Paket Harga (Beranda)</h2>
@@ -709,7 +778,7 @@ $cta_data    = mysqli_fetch_assoc(mysqli_query($conn, "SELECT * FROM cta_banner 
           </div>
         </div>
 
-        <!-- TAB KELOLA BANNER CTA (BARU) -->
+        <!-- TAB KELOLA BANNER CTA -->
         <div id="adminTabCta" class="card-studio space-y-6 hidden">
           <div class="border-b border-slate-100 pb-4">
             <h2 class="text-xl font-extrabold text-slate-900">Kelola Banner CTA Checkout</h2>
@@ -729,7 +798,7 @@ $cta_data    = mysqli_fetch_assoc(mysqli_query($conn, "SELECT * FROM cta_banner 
             </div>
             <div>
               <label class="block text-xs font-bold text-slate-700 uppercase mb-1.5">Deskripsi Singkat</label>
-              <textarea name="cta_deskripsi" rows="3" class="input-studio" required><= htmlspecialchars($cta_data['deskripsi'] ?? ''); ?></textarea>
+              <textarea name="cta_deskripsi" rows="3" class="input-studio" required><?= htmlspecialchars($cta_data['deskripsi'] ?? ''); ?></textarea>
             </div>
 
             <button type="submit" class="px-6 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-md">
@@ -738,7 +807,104 @@ $cta_data    = mysqli_fetch_assoc(mysqli_query($conn, "SELECT * FROM cta_banner 
           </form>
         </div>
 
-        <!-- TAB KELOLA TENTANG KAMI[cite: 3] -->
+        <!-- TAB KELOLA ARTIKEL & TIPS (DENGAN REVISI LENGKAP) -->
+        <div id="adminTabArticles" class="card-studio space-y-6 hidden">
+          <div class="border-b border-slate-100 pb-4">
+            <h2 class="text-xl font-extrabold text-slate-900">Kelola Artikel & Tips Web</h2>
+            <p class="text-slate-500 text-xs mt-0.5">Tambah artikel dengan filter kalender, dropdown kategori layanan, unggah gambar komputer, dan custom URL slug.</p>
+          </div>
+
+          <!-- FORM TAMBAH ARTIKEL -->
+          <form method="POST" action="admin-dashboard.php" enctype="multipart/form-data" class="p-5 rounded-2xl border border-slate-200 bg-slate-50/50 space-y-4">
+            <input type="hidden" name="action_tambah_artikel" value="1">
+            
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">Judul Artikel</label>
+                <input type="text" name="title" class="input-studio bg-white" placeholder="Contoh: Tips SEO Website UMKM" required>
+              </div>
+              <div>
+                <label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">Custom URL Slug (Link Artikel)</label>
+                <input type="text" name="slug" class="input-studio bg-white" placeholder="Contoh: tips-seo-website (Boleh dikosongkan)">
+                <span class="text-[10px] text-slate-400 mt-0.5 block">Jika kosong, URL akan digenerate otomatis dari judul.</span>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div>
+                <label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">Kategori Layanan Jasa</label>
+                <select name="category" class="input-studio bg-white" required>
+                  <option value="">-- Pilih Kategori --</option>
+                  <option value="Content Marketing">Content Marketing</option>
+                  <option value="Social Media Management">Social Media Management</option>
+                  <option value="Digital Advertising">Digital Advertising (Ads)</option>
+                  <option value="Business Growth">Business Growth & Strategy</option>
+                  <option value="Web & Digital Tips">Web & Digital Tips</option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">Tanggal Publikasi (Filter Kalender)</label>
+                <input type="date" name="date" class="input-studio bg-white" required>
+              </div>
+              <div>
+                <label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">Pilih File Gambar Komputer</label>
+                <input type="file" name="image_file" accept="image/*" class="input-studio bg-white py-2 file:mr-2 file:py-1 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-indigo-50 file:text-indigo-700" required>
+              </div>
+            </div>
+
+            <div>
+              <label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">Ringkasan / Excerpt</label>
+              <textarea name="excerpt" rows="2" class="input-studio bg-white" placeholder="Tulis ringkasan singkat artikel..." required></textarea>
+            </div>
+
+            <button type="submit" class="px-6 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-md flex items-center gap-2">
+              <span class="material-symbols-outlined text-[18px]">publish</span> Publikasikan Artikel Baru
+            </button>
+          </form>
+
+          <!-- TABEL DAFTAR ARTIKEL -->
+          <div class="overflow-x-auto rounded-2xl border border-slate-200 mt-6">
+            <table class="w-full text-left text-xs">
+              <thead class="bg-slate-50 border-b border-slate-200 text-slate-700 uppercase font-extrabold text-[10px]">
+                <tr>
+                  <th class="py-3.5 px-4">Gambar</th>
+                  <th class="py-3.5 px-4">Judul & Link URL (Slug)</th>
+                  <th class="py-3.5 px-4">Kategori Layanan</th>
+                  <th class="py-3.5 px-4">Tanggal</th>
+                  <th class="py-3.5 px-4 text-center">Aksi</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-100 font-medium text-slate-700">
+                <?php if ($articles_res && mysqli_num_rows($articles_res) > 0): ?>
+                  <?php while ($art = mysqli_fetch_assoc($articles_res)): ?>
+                    <tr class="hover:bg-slate-50">
+                      <td class="py-3 px-4">
+                        <div class="w-12 h-10 rounded-lg bg-slate-100 overflow-hidden border border-slate-200">
+                          <img src="<?= htmlspecialchars($art['image']); ?>" class="w-full h-full object-cover">
+                        </div>
+                      </td>
+                      <td class="py-3 px-4">
+                        <p class="font-bold text-slate-900"><?= htmlspecialchars($art['title']); ?></p>
+                        <p class="text-[10px] text-indigo-600 font-mono">detail-artikel.php?slug=<?= htmlspecialchars($art['slug']); ?></p>
+                      </td>
+                      <td class="py-3 px-4"><span class="px-2.5 py-1 rounded-md bg-rose-50 text-rose-600 font-extrabold text-[10px]"><?= htmlspecialchars($art['category']); ?></span></td>
+                      <td class="py-3 px-4 text-slate-500"><?= htmlspecialchars($art['date']); ?></td>
+                      <td class="py-3 px-4 text-center">
+                        <a href="admin-dashboard.php?delete_article=<?= $art['id']; ?>" onclick="return confirm('Hapus artikel ini?')" class="p-2 rounded-lg bg-rose-50 text-rose-600 hover:bg-rose-100 inline-flex items-center gap-1 font-bold" title="Hapus">
+                          <span class="material-symbols-outlined text-[16px]">delete</span> Hapus
+                        </a>
+                      </td>
+                    </tr>
+                  <?php endwhile; ?>
+                <?php else: ?>
+                  <tr><td colspan="5" class="py-8 text-center text-slate-400 font-bold">Belum ada artikel tersimpan di database.</td></tr>
+                <?php endif; ?>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- TAB KELOLA TENTANG KAMI -->
         <div id="adminTabAbout" class="card-studio space-y-6 hidden">
           <div class="border-b border-slate-100 pb-4">
             <h2 class="text-xl font-extrabold text-slate-900">Kelola Artikel "Tentang Kami"</h2>
@@ -755,7 +921,7 @@ $cta_data    = mysqli_fetch_assoc(mysqli_query($conn, "SELECT * FROM cta_banner 
 
             <div>
               <label class="block text-xs font-bold text-slate-700 uppercase mb-1.5">Deskripsi Profil Utama</label>
-              <textarea name="about_deskripsi" rows="5" class="input-studio" required><= htmlspecialchars($about_data['deskripsi']); ?></textarea>
+              <textarea name="about_deskripsi" rows="5" class="input-studio" required><?= htmlspecialchars($about_data['deskripsi']); ?></textarea>
             </div>
 
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -821,6 +987,7 @@ $cta_data    = mysqli_fetch_assoc(mysqli_query($conn, "SELECT * FROM cta_banner 
       document.getElementById('adminTabSlides').classList.add('hidden');
       document.getElementById('adminTabPaket').classList.add('hidden');
       document.getElementById('adminTabCta').classList.add('hidden');
+      document.getElementById('adminTabArticles').classList.add('hidden');
       document.getElementById('adminTabAbout').classList.add('hidden');
       document.getElementById('adminTabProfile').classList.add('hidden');
 
@@ -831,6 +998,7 @@ $cta_data    = mysqli_fetch_assoc(mysqli_query($conn, "SELECT * FROM cta_banner 
       document.getElementById('btnTabSlides').className = "w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-50 transition-all";
       document.getElementById('btnTabPaket').className = "w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-50 transition-all";
       document.getElementById('btnTabCta').className = "w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-50 transition-all";
+      document.getElementById('btnTabArticles').className = "w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-50 transition-all";
       document.getElementById('btnTabAbout').className = "w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-50 transition-all";
       document.getElementById('btnTabProfile').className = "w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-50 transition-all";
 
@@ -855,6 +1023,9 @@ $cta_data    = mysqli_fetch_assoc(mysqli_query($conn, "SELECT * FROM cta_banner 
       } else if (tabName === 'cta') {
         document.getElementById('adminTabCta').classList.remove('hidden');
         document.getElementById('btnTabCta').className = "w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold bg-indigo-50 text-indigo-700 transition-all";
+      } else if (tabName === 'articles') {
+        document.getElementById('adminTabArticles').classList.remove('hidden');
+        document.getElementById('btnTabArticles').className = "w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold bg-indigo-50 text-indigo-700 transition-all";
       } else if (tabName === 'about') {
         document.getElementById('adminTabAbout').classList.remove('hidden');
         document.getElementById('btnTabAbout').className = "w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold bg-indigo-50 text-indigo-700 transition-all";

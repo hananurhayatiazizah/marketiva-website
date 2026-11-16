@@ -133,8 +133,7 @@ $dashboard_link = ($user_role === 'admin') ? 'admin-dashboard.php' : 'user-dashb
               <label class="block text-xs font-bold text-slate-700 uppercase mb-1">Pilih Metode Pembayaran</label>
               <select name="metode_bayar" class="input-studio" required>
                 <option value="">-- Pilih Bank / E-Wallet --</option>
-                <option value="Transfer BCA - 8830123456">Transfer BCA (8830123456)</option>
-                <option value="Transfer Mandiri - 1310098765432">Transfer Mandiri (1310098765432)</option>
+                <option value="Transfer BSI (7368562097)">Transfer BSI (7368562097)</option>
                 <option value="QRIS All Payment">QRIS (Scan & Bayar Instan)</option>
               </select>
             </div>

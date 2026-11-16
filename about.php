@@ -29,17 +29,43 @@ $dashboard_link = ($user_role === 'admin') ? 'admin-dashboard.php' : 'user-dashb
 </head>
 <body class="min-h-screen flex flex-col justify-between">
 
-  <!-- HEADER NAVBAR KONSISTEN & DINAMIS -->
-  <header class="sticky top-0 z-50 bg-white/90 backdrop-blur-md border-b border-slate-200">
-    <div class="max-w-[1320px] mx-auto px-6 h-20 flex items-center justify-between">
-      <a href="index.php" class="font-extrabold text-2xl tracking-tight">
-        <span class="text-[#F43F5E]">Mar</span><span class="text-[#3B82F6]">ke</span><span class="text-[#10B981]">ti</span><span class="text-[#F59E0B]">va</span>
+  <!-- HEADER / NAVBAR -->
+  <header class="fixed top-0 left-0 right-0 z-50 bg-white/90 backdrop-blur-md border-b border-slate-200/60 shadow-[0_1px_8px_rgba(0,0,0,0.04)]">
+    <div class="h-20 max-w-[1240px] mx-auto px-6 flex items-center justify-between gap-4">
+      
+      <!-- LOGO MARKETIVA -->
+      <a class="flex items-center gap-2.5" href="index.php#beranda">
+        <span class="font-extrabold text-xl tracking-tight">
+          <span class="text-[#F43F5E]">Mar</span><span class="text-[#3B82F6]">ke</span><span class="text-[#10B981]">ti</span><span class="text-[#F59E0B]">va</span>
+        </span>
       </a>
 
-      <nav class="hidden md:flex items-center gap-8 text-xs font-bold text-slate-600">
-        <a href="index.php" class="hover:text-[#E11D48] transition-colors">Beranda</a>
-        <a href="catalog.php" class="hover:text-[#E11D48] transition-colors">Katalog Layanan</a>
-        <a href="about.php" class="text-[#E11D48]">Tentang Kami</a>
+      <!-- MENU NAVBAR -->
+      <nav class="hidden md:flex items-center gap-8 text-sm font-semibold text-slate-700">
+        <a class="hover:text-[#E11D48] transition-colors flex items-center gap-1.5" href="index.php#beranda">
+          <span class="material-symbols-outlined text-[18px]">home</span>
+          <span>Home</span>
+        </a>
+        
+        <a class="hover:text-[#E11D48] transition-colors flex items-center gap-1.5" href="about.php">
+          <span class="material-symbols-outlined text-[18px]">info</span>
+          <span>Tentang Kami</span>
+        </a>
+
+        <a class="hover:text-[#E11D48] transition-colors flex items-center gap-1.5" href="index.php#keunggulan">
+          <span class="material-symbols-outlined text-[18px]">verified</span>
+          <span>Keunggulan</span>
+        </a>
+        
+        <a class="hover:text-[#E11D48] transition-colors flex items-center gap-1.5" href="catalog.php">
+          <span class="material-symbols-outlined text-[18px]">grid_view</span>
+          <span>Catalog Layanan</span>
+        </a>
+
+        <a class="hover:text-[#E11D48] transition-colors flex items-center gap-1.5" href="article.php">
+          <span class="material-symbols-outlined text-[18px]">grid_view</span>
+          <span>Article</span>
+        </a>
       </nav>
 
       <div class="flex items-center gap-4">
