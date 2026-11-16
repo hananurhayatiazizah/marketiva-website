@@ -122,7 +122,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action_update_admin']
     }
 }
 
-// 6. PROSES UPDATE KONTEN "TENTANG KAMI"[cite: 3]
+// 6. PROSES UPDATE KONTEN "TENTANG KAMI"
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action_update_about'])) {
     $judul     = trim($_POST['about_judul'] ?? '');
     $deskripsi = trim($_POST['about_deskripsi'] ?? '');
@@ -149,7 +149,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action_update_about']
     }
 }
 
-// 7. PROSES TAMBAH / EDIT HERO SLIDE[cite: 3]
+// 7. PROSES TAMBAH / EDIT HERO SLIDE
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action_save_slide'])) {
     $slide_id  = intval($_POST['slide_id'] ?? 0);
     $badge     = trim($_POST['badge'] ?? '');
@@ -619,12 +619,17 @@ $articles_res = mysqli_query($conn, "SELECT * FROM articles ORDER BY id DESC");
                         </span>
                       </td>
                       <td class="py-3 px-4 text-center">
-                        <select onchange="location.href='admin-dashboard.php?order_id=<?= $ord['id']; ?>&update_order_status='+this.value" class="text-[11px] font-bold border border-slate-300 rounded-lg p-1 bg-white">
-                          <option value="">-- Ubah Status --</option>
-                          <option value="Menunggu Konfirmasi">Menunggu</option>
-                          <option value="Diproses">Diproses</option>
-                          <option value="Selesai">Selesai</option>
-                        </select>
+                        <div class="flex items-center justify-center gap-1.5">
+                          <button type="button" onclick='openOrderDetail(<?= json_encode($ord); ?>)' class="px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-bold text-[11px]">
+                            Detail
+                          </button>
+                          <select onchange="location.href='admin-dashboard.php?order_id=<?= $ord['id']; ?>&update_order_status='+this.value" class="text-[11px] font-bold border border-slate-300 rounded-lg p-1 bg-white">
+                            <option value="">-- Ubah Status --</option>
+                            <option value="Menunggu Konfirmasi">Menunggu</option>
+                            <option value="Diproses">Diproses</option>
+                            <option value="Selesai">Selesai</option>
+                          </select>
+                        </div>
                       </td>
                     </tr>
                   <?php endwhile; ?>
@@ -633,6 +638,120 @@ $articles_res = mysqli_query($conn, "SELECT * FROM articles ORDER BY id DESC");
                 <?php endif; ?>
               </tbody>
             </table>
+          </div>
+        </div>
+
+        <!-- PANEL DETAIL PESANAN (TERINTEGRASI DI ADMIN DASHBOARD) -->
+        <div id="adminTabOrderDetail" class="card-studio space-y-6 hidden">
+          <div class="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 pb-4">
+            <div class="flex flex-wrap items-center gap-3">
+              <h2 id="detailOrderTitle" class="text-xl font-extrabold text-slate-900">Detail Pesanan</h2>
+              <span id="detailOrderStatusBadge" class="px-3 py-1 rounded-full text-xs font-bold bg-rose-50 text-rose-700">
+                Menunggu Konfirmasi
+              </span>
+            </div>
+            <button type="button" onclick="switchAdminTab('orders')" class="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold inline-flex items-center gap-1.5">
+              <span class="material-symbols-outlined text-[16px]">arrow_back</span> Kembali
+            </button>
+          </div>
+
+          <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+            <div class="lg:col-span-8 space-y-6">
+              <!-- Status & Verifikasi Pembayaran -->
+              <div class="p-5 rounded-2xl border border-slate-200 bg-slate-50/50 space-y-4">
+                <h3 class="text-sm font-extrabold text-slate-900 border-b border-slate-200 pb-2.5">
+                  Status & Verifikasi Pembayaran
+                </h3>
+                <div class="p-4 rounded-xl bg-white border border-slate-200 text-xs space-y-1">
+                  <p class="font-extrabold text-slate-900">Metode Pembayaran</p>
+                  <p id="detailMetodeBayar" class="text-slate-600">Transfer Manual / Konfirmasi Admin</p>
+                </div>
+                <div class="p-4 rounded-xl bg-white border border-slate-200 text-xs space-y-1">
+                  <p class="font-extrabold text-slate-900">Bukti Pembayaran</p>
+                  <p id="detailBuktiBayar" class="text-slate-500">Menunggu konfirmasi bukti pembayaran dari pelanggan.</p>
+                </div>
+              </div>
+
+              <!-- Daftar Layanan yang Dipesan -->
+              <div class="p-5 rounded-2xl border border-slate-200 bg-slate-50/50 space-y-4">
+                <h3 class="text-sm font-extrabold text-slate-900 border-b border-slate-200 pb-2.5">
+                  Daftar Layanan yang Dipesan
+                </h3>
+                <div class="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+                  <table class="w-full text-left text-xs">
+                    <thead class="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold uppercase text-[10px]">
+                      <tr>
+                        <th class="py-3 px-4">Layanan</th>
+                        <th class="py-3 px-4">Harga Satuan</th>
+                        <th class="py-3 px-4">Qty</th>
+                        <th class="py-3 px-4 text-right">Subtotal</th>
+                      </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 text-slate-700">
+                      <tr>
+                        <td class="py-3.5 px-4">
+                          <p id="detailNamaLayanan" class="font-bold text-slate-900">-</p>
+                          <p id="detailKategori" class="text-[11px] text-slate-500">Kategori: -</p>
+                        </td>
+                        <td id="detailHargaSatuan" class="py-3.5 px-4 font-semibold">Rp 0</td>
+                        <td class="py-3.5 px-4">1</td>
+                        <td id="detailSubtotal" class="py-3.5 px-4 text-right font-extrabold text-slate-900">Rp 0</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            <div class="lg:col-span-4 space-y-6">
+              <!-- Kontak Pembeli -->
+              <div class="p-5 rounded-2xl border border-slate-200 bg-slate-50/50 space-y-4">
+                <h3 class="text-sm font-extrabold text-slate-900 border-b border-slate-200 pb-2.5">
+                  Kontak Pembeli
+                </h3>
+                <div class="space-y-2.5 text-xs">
+                  <div>
+                    <span class="text-slate-400 block text-[10px] uppercase font-bold">Nama Pemesan</span>
+                    <span id="detailNamaPemesan" class="font-bold text-slate-900">-</span>
+                  </div>
+                  <div>
+                    <span class="text-slate-400 block text-[10px] uppercase font-bold">Nama Usaha</span>
+                    <span id="detailNamaUsaha" class="font-semibold text-slate-700">-</span>
+                  </div>
+                  <div>
+                    <span class="text-slate-400 block text-[10px] uppercase font-bold">Email</span>
+                    <span id="detailEmail" class="font-semibold text-slate-700">-</span>
+                  </div>
+                  <div>
+                    <span class="text-slate-400 block text-[10px] uppercase font-bold">No. Handphone / WhatsApp</span>
+                    <span id="detailWhatsapp" class="font-semibold text-slate-700">-</span>
+                  </div>
+                </div>
+                <a id="detailWaLink" href="#" target="_blank" rel="noopener noreferrer" class="w-full py-2.5 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold flex items-center justify-center gap-2">
+                  <span class="material-symbols-outlined text-[16px]">chat</span> Hubungi via WhatsApp
+                </a>
+              </div>
+
+              <!-- Update Status Pesanan -->
+              <div class="p-5 rounded-2xl border border-slate-200 bg-slate-50/50 space-y-4">
+                <h3 class="text-sm font-extrabold text-slate-900 border-b border-slate-200 pb-2.5">
+                  Update Status Pesanan
+                </h3>
+                <div class="space-y-3">
+                  <div>
+                    <label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">Status Pesanan</label>
+                    <select id="detailStatusSelect" class="input-studio bg-white text-xs font-bold">
+                      <option value="Menunggu Konfirmasi">Menunggu Konfirmasi</option>
+                      <option value="Diproses">Diproses</option>
+                      <option value="Selesai">Selesai</option>
+                    </select>
+                  </div>
+                  <button type="button" onclick="saveOrderDetailStatus()" class="w-full py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold">
+                    Simpan Status
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -979,10 +1098,13 @@ $articles_res = mysqli_query($conn, "SELECT * FROM articles ORDER BY id DESC");
   </footer>
 
   <script>
+    let activeOrderId = null;
+
     function switchAdminTab(tabName) {
       document.getElementById('adminTabServices').classList.add('hidden');
       document.getElementById('adminTabAddService').classList.add('hidden');
       document.getElementById('adminTabOrders').classList.add('hidden');
+      document.getElementById('adminTabOrderDetail').classList.add('hidden');
       document.getElementById('adminTabUsers').classList.add('hidden');
       document.getElementById('adminTabSlides').classList.add('hidden');
       document.getElementById('adminTabPaket').classList.add('hidden');
@@ -1011,6 +1133,9 @@ $articles_res = mysqli_query($conn, "SELECT * FROM articles ORDER BY id DESC");
       } else if (tabName === 'orders') {
         document.getElementById('adminTabOrders').classList.remove('hidden');
         document.getElementById('btnTabOrders').className = "w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold bg-indigo-50 text-indigo-700 transition-all";
+      } else if (tabName === 'order-detail') {
+        document.getElementById('adminTabOrderDetail').classList.remove('hidden');
+        document.getElementById('btnTabOrders').className = "w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold bg-indigo-50 text-indigo-700 transition-all";
       } else if (tabName === 'users') {
         document.getElementById('adminTabUsers').classList.remove('hidden');
         document.getElementById('btnTabUsers').className = "w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold bg-indigo-50 text-indigo-700 transition-all";
@@ -1033,6 +1158,43 @@ $articles_res = mysqli_query($conn, "SELECT * FROM articles ORDER BY id DESC");
         document.getElementById('adminTabProfile').classList.remove('hidden');
         document.getElementById('btnTabProfile').className = "w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold bg-indigo-50 text-indigo-700 transition-all";
       }
+    }
+
+    function openOrderDetail(data) {
+      activeOrderId = data.id;
+      const kode = data.order_id ? data.order_id : ('#' + data.id);
+      const harga = Number(data.harga || 0).toLocaleString('id-ID');
+      const status = data.status || 'Menunggu Konfirmasi';
+
+      document.getElementById('detailOrderTitle').innerText = 'Detail Pesanan ' + kode;
+      document.getElementById('detailOrderStatusBadge').innerText = status;
+      document.getElementById('detailNamaLayanan').innerText = data.nama_layanan || '-';
+      document.getElementById('detailKategori').innerText = 'Kategori: ' + (data.kategori || '-');
+      document.getElementById('detailHargaSatuan').innerText = 'Rp ' + harga;
+      document.getElementById('detailSubtotal').innerText = 'Rp ' + harga;
+      document.getElementById('detailNamaPemesan').innerText = data.nama_lengkap || '-';
+      document.getElementById('detailNamaUsaha').innerText = data.nama_usaha || '-';
+      document.getElementById('detailEmail').innerText = data.user_email || '-';
+      document.getElementById('detailWhatsapp').innerText = data.whatsapp || data.user_email || '-';
+      document.getElementById('detailStatusSelect').value = status;
+
+      let waRaw = String(data.whatsapp || '').replace(/[^0-9]/g, '');
+      if (waRaw.startsWith('0')) waRaw = '62' + waRaw.slice(1);
+      const waBtn = document.getElementById('detailWaLink');
+      if (waRaw) {
+        waBtn.href = 'https://wa.me/' + waRaw;
+        waBtn.classList.remove('hidden');
+      } else {
+        waBtn.classList.add('hidden');
+      }
+
+      switchAdminTab('order-detail');
+    }
+
+    function saveOrderDetailStatus() {
+      if (!activeOrderId) return;
+      const val = document.getElementById('detailStatusSelect').value;
+      location.href = 'admin-dashboard.php?order_id=' + encodeURIComponent(activeOrderId) + '&update_order_status=' + encodeURIComponent(val);
     }
 
     function openAddForm() {
