@@ -1,26 +1,40 @@
 <?php
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
 require_once 'koneksi.php';
 
 $error = '';
 $success = '';
 
+function verifyStoredPassword(string $plainPassword, ?string $storedPassword): bool {
+    if ($storedPassword === null || $storedPassword === '') {
+        return false;
+    }
+    $info = password_get_info($storedPassword);
+    if (!empty($info['algo'])) {
+        return password_verify($plainPassword, $storedPassword);
+    }
+    return hash_equals($storedPassword, $plainPassword);
+}
+
 // ==========================================
 // 1. PENANGANAN LOGIN / REGISTER DENGAN GOOGLE
 // ==========================================
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['google_credential'])) {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['google_credential']) && !empty($_POST['google_credential'])) {
     $credential = $_POST['google_credential'];
-    
+
     $token_parts = explode('.', $credential);
     if (count($token_parts) === 3) {
         $payload = json_decode(base64_decode(str_replace(['-', '_'], ['+', '/'], $token_parts[1])), true);
-        
+
         if ($payload && isset($payload['email'])) {
             $google_email = trim($payload['email']);
-            $google_name = trim($payload['name'] ?? 'Pengguna Google');
+            $google_name  = trim($payload['name'] ?? 'Pengguna Google');
 
             // Atur email admin khusus
             $admin_email_khusus = "marketivaadmin2710@gmail.com";
-            $assigned_role = ($google_email === $admin_email_khusus) ? 'admin' : 'user';
+            $assigned_role      = ($google_email === $admin_email_khusus) ? 'admin' : 'user';
 
             $stmt = mysqli_prepare($conn, "SELECT * FROM users WHERE email = ?");
             mysqli_stmt_bind_param($stmt, "s", $google_email);
@@ -29,12 +43,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['google_credential']))
 
             if ($row = mysqli_fetch_assoc($res)) {
                 $_SESSION['user_id'] = $row['id'];
-                $_SESSION['user'] = $row['nama_lengkap'];
-                $_SESSION['role'] = $assigned_role;
-                $_SESSION['email'] = $row['email'];
+                $_SESSION['user']    = $row['nama_lengkap'];
+                $_SESSION['role']    = $assigned_role;
+                $_SESSION['email']   = $row['email'];
 
                 if ($assigned_role === 'admin' && $row['role'] !== 'admin') {
-                    mysqli_query($conn, "UPDATE users SET role = 'admin' WHERE email = '$google_email'");
+                    $upd_role = mysqli_prepare($conn, "UPDATE users SET role = 'admin' WHERE email = ?");
+                    mysqli_stmt_bind_param($upd_role, "s", $google_email);
+                    mysqli_stmt_execute($upd_role);
                 }
 
                 if ($assigned_role === 'admin') {
@@ -48,9 +64,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['google_credential']))
                 mysqli_stmt_bind_param($stmt_ins, "sss", $google_name, $google_email, $assigned_role);
                 if (mysqli_stmt_execute($stmt_ins)) {
                     $_SESSION['user_id'] = mysqli_insert_id($conn);
-                    $_SESSION['user'] = $google_name;
-                    $_SESSION['role'] = $assigned_role;
-                    $_SESSION['email'] = $google_email;
+                    $_SESSION['user']    = $google_name;
+                    $_SESSION['role']    = $assigned_role;
+                    $_SESSION['email']   = $google_email;
 
                     if ($assigned_role === 'admin') {
                         header("Location: admin-dashboard.php");
@@ -69,27 +85,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['google_credential']))
 // ==========================================
 // 2. PROSES FORM MANUAL (LOGIN & REGISTER)
 // ==========================================
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['google_credential'])) {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && empty($_POST['google_credential'])) {
     $action = $_POST['action'] ?? 'login';
 
     if ($action === 'register') {
         $nama_lengkap = trim($_POST['fullNameInput'] ?? '');
-        $email = trim($_POST['emailInput'] ?? '');
-        $whatsapp = trim($_POST['phoneInput'] ?? '');
-        $password = trim($_POST['regPasswordInput'] ?? '');
+        $email        = trim($_POST['emailInput'] ?? '');
+        $whatsapp     = trim($_POST['phoneInput'] ?? '');
+        $password     = trim($_POST['regPasswordInput'] ?? '');
 
         if (!empty($nama_lengkap) && !empty($email) && !empty($password)) {
-            $check = mysqli_query($conn, "SELECT * FROM users WHERE email = '$email'");
-            if (mysqli_num_rows($check) > 0) {
-                $error = "Email sudah terdaftar. Silakan gunakan email lain.";
+            $check_stmt = mysqli_prepare($conn, "SELECT id FROM users WHERE email = ? LIMIT 1");
+            mysqli_stmt_bind_param($check_stmt, "s", $email);
+            mysqli_stmt_execute($check_stmt);
+            $check_res = mysqli_stmt_get_result($check_stmt);
+
+            if ($check_res && mysqli_num_rows($check_res) > 0) {
+                $error = "Email sudah terdaftar. Silakan gunakan email lain atau masuk dengan Google.";
             } else {
-                $query = "INSERT INTO users (nama_lengkap, email, whatsapp, password, role) VALUES ('$nama_lengkap', '$email', '$whatsapp', '$password', 'user')";
-                
-                if (mysqli_query($conn, $query)) {
+                $ins_stmt = mysqli_prepare($conn, "INSERT INTO users (nama_lengkap, email, whatsapp, password, role) VALUES (?, ?, ?, ?, 'user')");
+                mysqli_stmt_bind_param($ins_stmt, "ssss", $nama_lengkap, $email, $whatsapp, $password);
+
+                if (mysqli_stmt_execute($ins_stmt)) {
                     $_SESSION['user_id'] = mysqli_insert_id($conn);
-                    $_SESSION['user'] = $nama_lengkap;
-                    $_SESSION['role'] = 'user';
-                    $_SESSION['email'] = $email;
+                    $_SESSION['user']    = $nama_lengkap;
+                    $_SESSION['role']    = 'user';
+                    $_SESSION['email']   = $email;
                     header("Location: user-dashboard.php");
                     exit();
                 } else {
@@ -106,19 +127,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['google_credential'])
         $password = trim($_POST['passwordInput'] ?? '');
 
         if (!empty($username) && !empty($password)) {
-            $stmt = mysqli_prepare($conn, "SELECT * FROM users WHERE nama_lengkap = ? OR email = ?");
+            $stmt = mysqli_prepare($conn, "SELECT * FROM users WHERE nama_lengkap = ? OR email = ? LIMIT 1");
             mysqli_stmt_bind_param($stmt, "ss", $username, $username);
             mysqli_stmt_execute($stmt);
             $result = mysqli_stmt_get_result($stmt);
 
             if ($row = mysqli_fetch_assoc($result)) {
-                if ($row['password'] === $password) {
-                    $_SESSION['user_id'] = $row['id'];
-                    $_SESSION['user'] = $row['nama_lengkap'];
-                    $_SESSION['role'] = $row['role'];
-                    $_SESSION['email'] = $row['email'];
+                $stored_pw = $row['password'] ?? '';
 
-                    if ($row['role'] === 'admin') {
+                if ($stored_pw === null || trim((string)$stored_pw) === '') {
+                    $error = "Akun ini belum memiliki kata sandi (biasanya terdaftar lewat Google). Silakan masuk dengan Google atau atur kata sandi baru.";
+                } elseif (verifyStoredPassword($password, (string)$stored_pw)) {
+                    $_SESSION['user_id'] = $row['id'];
+                    $_SESSION['user']    = $row['nama_lengkap'];
+                    $_SESSION['role']    = $row['role'] ?: 'user';
+                    $_SESSION['email']   = $row['email'];
+
+                    if (($_SESSION['role']) === 'admin') {
                         header("Location: admin-dashboard.php");
                         exit();
                     } else {
@@ -150,19 +175,19 @@ if (isset($_GET['action']) && $_GET['action'] === 'logout') {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Marketiva - Masuk & Pendaftaran Akun</title>
-  
+
   <script src="https://cdn.tailwindcss.com"></script>
   <!-- Library Resmi Google Identity Services -->
   <script src="https://accounts.google.com/gsi/client" async defer></script>
-  
+
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet">
 
   <style>
-    body { 
-      font-family: 'Plus Jakarta Sans', sans-serif; 
+    body {
+      font-family: 'Plus Jakarta Sans', sans-serif;
       background: radial-gradient(100% 100% at 50% 0%, #FFF1F2 0%, #FAF9F6 100%);
     }
     .card-modern {
@@ -171,31 +196,31 @@ if (isset($_GET['action']) && $_GET['action'] === 'logout') {
       border: 1px solid rgba(226, 232, 240, 0.8);
       box-shadow: 0 20px 40px -15px rgba(15, 23, 42, 0.07);
     }
-    .btn-primary-hero { 
-      background-color: #E11D48; 
-      color: white; 
-      font-weight: 700; 
-      padding: 0.875rem 1.75rem; 
-      border-radius: 0.875rem; 
-      transition: all 0.2s ease-in-out; 
+    .btn-primary-hero {
+      background-color: #E11D48;
+      color: white;
+      font-weight: 700;
+      padding: 0.875rem 1.75rem;
+      border-radius: 0.875rem;
+      transition: all 0.2s ease-in-out;
     }
     .btn-primary-hero:hover { background-color: #BE123C; transform: translateY(-1px); }
-    .btn-secondary-blue { 
-      background-color: #4F46E5; 
-      color: white; 
-      font-weight: 700; 
-      padding: 0.875rem 1.75rem; 
-      border-radius: 0.875rem; 
-      transition: all 0.2s ease-in-out; 
+    .btn-secondary-blue {
+      background-color: #4F46E5;
+      color: white;
+      font-weight: 700;
+      padding: 0.875rem 1.75rem;
+      border-radius: 0.875rem;
+      transition: all 0.2s ease-in-out;
     }
-    .input-studio { 
-      height: 48px; 
-      border-radius: 0.75rem; 
-      border: 1.5px solid #E2E8F0; 
-      padding: 0 1rem; 
-      width: 100%; 
-      font-size: 0.875rem; 
-      background-color: #FFFFFF; 
+    .input-studio {
+      height: 48px;
+      border-radius: 0.75rem;
+      border: 1.5px solid #E2E8F0;
+      padding: 0 1rem;
+      width: 100%;
+      font-size: 0.875rem;
+      background-color: #FFFFFF;
       transition: all 0.2s;
     }
     .input-studio:focus { outline: none; border-color: #E11D48; box-shadow: 0 0 0 4px rgba(225,29,72,0.1); }
@@ -219,7 +244,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'logout') {
   <!-- KONTEN UTAMA LOGIN -->
   <main class="flex-1 flex items-center justify-center px-4 py-6 relative z-10">
     <div class="w-full max-w-md">
-      
+
       <?php if (!empty($error)): ?>
         <div class="mb-4 p-3.5 rounded-2xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold text-center flex items-center justify-center gap-2 shadow-sm">
           <span class="material-symbols-outlined text-[18px]">error</span>
@@ -239,7 +264,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'logout') {
 
       <!-- KARTU FORM UTAMA -->
       <div class="card-modern p-8 rounded-3xl">
-        
+
         <!-- INDIKATOR ROLE DINAMIK -->
         <div id="role-indicator" class="mb-6 p-3.5 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-between transition-all">
           <div class="flex items-center gap-3">
@@ -305,12 +330,12 @@ if (isset($_GET['action']) && $_GET['action'] === 'logout') {
           <div id="loginFields" class="space-y-3.5">
             <div>
               <label class="block text-xs font-bold text-slate-700 uppercase mb-1">Nama Pengguna / Email</label>
-              <input 
+              <input
                 name="usernameInput"
-                id="usernameInput" 
-                type="text" 
+                id="usernameInput"
+                type="text"
                 oninput="detectSmartRole(this.value)"
-                placeholder="Masukkan Nama atau Email" 
+                placeholder="Masukkan Nama atau Email"
                 class="input-studio"
               >
             </div>
@@ -398,7 +423,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'logout') {
         roleTitle.textContent = "Control Panel Admin (" + value + ")";
         roleChip.className = "text-[10px] font-bold px-3 py-1 rounded-full bg-indigo-600 text-white transition-colors";
         roleChip.textContent = "Admin Mode";
-        
+
         submitBtn.className = "btn-secondary-blue w-full justify-center mt-2 shadow-lg shadow-indigo-600/20 flex items-center gap-2";
       } else {
         roleIndicator.className = "mb-6 p-3.5 rounded-2xl bg-slate-50 border border-slate-200 flex items-center justify-between transition-all";

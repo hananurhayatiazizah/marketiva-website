@@ -1,4 +1,7 @@
 <?php
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
 require_once 'koneksi.php';
 
 if (!isset($_SESSION['user']) || ($_SESSION['role'] ?? '') !== 'admin') {
@@ -6,16 +9,69 @@ if (!isset($_SESSION['user']) || ($_SESSION['role'] ?? '') !== 'admin') {
     exit();
 }
 
-$admin_name = $_SESSION['user'];
+$admin_name  = $_SESSION['user'];
+$admin_id    = $_SESSION['user_id'] ?? null;
+$admin_email = $_SESSION['email'] ?? '';
 $msg_success = '';
-$msg_error = '';
+$msg_error   = '';
+$initial_tab = $_GET['tab'] ?? 'services';
 
 // Fungsi helper mencatat log aktivitas
 function recordLog($conn, $admin, $aktivitas) {
     $stmt = $conn->prepare("INSERT INTO activity_logs (admin_name, aktivitas) VALUES (?, ?)");
-    $stmt->bind_param("ss", $admin, $aktivitas);
-    $stmt->execute();
-    $stmt->close();
+    if ($stmt) {
+        $stmt->bind_param("ss", $admin, $aktivitas);
+        $stmt->execute();
+        $stmt->close();
+    }
+}
+
+// Fungsi helper memastikan kolom tambahan pada tabel about_us tersedia
+function ensureAboutUsColumns($conn) {
+    if (!$conn) return;
+    $cols = [
+        'tab_umkm_label'    => "VARCHAR(120) NOT NULL DEFAULT 'Pelaku UMKM & Brand'",
+        'tab_umkm_desc'     => "TEXT NULL",
+        'tab_agency_label'  => "VARCHAR(120) NOT NULL DEFAULT 'Tim & Sistem Marketiva'",
+        'tab_agency_desc'   => "TEXT NULL",
+        'three_words_quote' => "VARCHAR(255) NOT NULL DEFAULT 'KREATIF, TERUKUR, DAN TERPERCAYA — 3 KATA YANG PALING TEPAT MENGGAMBARKAN MARKETIVA'",
+        'smm_title'         => "VARCHAR(180) NOT NULL DEFAULT 'Pengelolaan Akun Instagram & TikTok Terjadwal'",
+        'smm_desc'          => "TEXT NULL",
+        'content_title'     => "VARCHAR(180) NOT NULL DEFAULT 'Desain Visual Kreatif, Carousel & Video Pendek Reels'",
+        'content_desc'      => "TEXT NULL",
+        'ads_title'         => "VARCHAR(180) NOT NULL DEFAULT 'Iklan Berbayar Meta Ads & TikTok Ads Tertarget'",
+        'ads_desc'          => "TEXT NULL",
+    ];
+    foreach ($cols as $col => $def) {
+        $safe = mysqli_real_escape_string($conn, $col);
+        $chk  = mysqli_query($conn, "SHOW COLUMNS FROM `about_us` LIKE '{$safe}'");
+        if ($chk && mysqli_num_rows($chk) === 0) {
+            @mysqli_query($conn, "ALTER TABLE `about_us` ADD COLUMN `{$col}` {$def}");
+        }
+    }
+}
+
+ensureAboutUsColumns($conn);
+
+// 0. LIHAT PROFIL USER (READ-ONLY) DARI DATA PELANGGAN
+if (isset($_GET['view_user'])) {
+    $target_uid = intval($_GET['view_user']);
+    if ($target_uid > 0) {
+        $stmt_u = $conn->prepare("SELECT id, nama_lengkap, email FROM users WHERE id = ? AND role = 'user' LIMIT 1");
+        $stmt_u->bind_param("i", $target_uid);
+        $stmt_u->execute();
+        $res_u = $stmt_u->get_result();
+        if ($target_user = $res_u->fetch_assoc()) {
+            $uid_safe = intval($target_user['id']);
+            recordLog($conn, $admin_name, "Melihat profil read-only pelanggan: " . $target_user['nama_lengkap'] . " (" . $target_user['email'] . ")");
+            $stmt_u->close();
+            header("Location: user-dashboard.php?view_user=" . $uid_safe);
+            exit();
+        }
+        $stmt_u->close();
+    }
+    $msg_error   = "Akun pelanggan tidak ditemukan.";
+    $initial_tab = 'users';
 }
 
 // 1. PROSES TAMBAH KATEGORI BARU
@@ -84,19 +140,43 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action_save_service']
     }
 }
 
-// 3. PROSES UPDATE STATUS PESANAN
+// 3. PROSES UPDATE STATUS PESANAN (GET & POST MODAL)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action_update_order_status'])) {
+    $o_id     = intval($_POST['order_id'] ?? 0);
+    $o_status = trim($_POST['order_status'] ?? '');
+    if ($o_id > 0 && !empty($o_status)) {
+        $stmt_ord = $conn->prepare("UPDATE orders SET status = ? WHERE id = ?");
+        $stmt_ord->bind_param("si", $o_status, $o_id);
+        $stmt_ord->execute();
+        $stmt_ord->close();
+        recordLog($conn, $admin_name, "Mengubah status pesanan #$o_id menjadi $o_status");
+        header("Location: admin-dashboard.php?tab=orders&status_updated=1");
+        exit();
+    }
+}
+
 if (isset($_GET['update_order_status']) && isset($_GET['order_id'])) {
-    $o_id = intval($_GET['order_id']);
-    $o_status = $_GET['update_order_status'];
-    mysqli_query($conn, "UPDATE orders SET status='$o_status' WHERE id=$o_id");
-    recordLog($conn, $admin_name, "Mengubah status pesanan #$o_id menjadi $o_status");
-    header("Location: admin-dashboard.php");
+    $o_id     = intval($_GET['order_id']);
+    $o_status = trim($_GET['update_order_status']);
+    if ($o_id > 0 && !empty($o_status)) {
+        $stmt_ord = $conn->prepare("UPDATE orders SET status = ? WHERE id = ?");
+        $stmt_ord->bind_param("si", $o_status, $o_id);
+        $stmt_ord->execute();
+        $stmt_ord->close();
+        recordLog($conn, $admin_name, "Mengubah status pesanan #$o_id menjadi $o_status");
+    }
+    header("Location: admin-dashboard.php?tab=orders&status_updated=1");
     exit();
+}
+
+if (isset($_GET['status_updated'])) {
+    $msg_success = "Status pesanan berhasil diperbarui!";
+    $initial_tab = 'orders';
 }
 
 // 4. PROSES HAPUS LAYANAN
 if (isset($_GET['delete_service'])) {
-    $id_del = intval($_GET['delete_service']);
+    $id_del  = intval($_GET['delete_service']);
     $get_img = mysqli_query($conn, "SELECT nama_layanan, gambar FROM services WHERE id = $id_del");
     if ($row_img = mysqli_fetch_assoc($get_img)) {
         if (!empty($row_img['gambar']) && file_exists($row_img['gambar'])) {
@@ -109,41 +189,115 @@ if (isset($_GET['delete_service'])) {
     exit();
 }
 
-// 5. PROSES UPDATE PROFIL ADMIN
+// 5. PROSES UPDATE PROFIL ADMIN (TERHUBUNG KE TABEL USERS & SESSION)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action_update_admin'])) {
-    $new_name = trim($_POST['admin_name'] ?? '');
-    if (!empty($new_name)) {
-        $_SESSION['user'] = $new_name;
-        $admin_name = $new_name;
-        $msg_success = "Profil administrator berhasil diperbarui!";
-        recordLog($conn, $admin_name, "Memperbarui nama profil admin.");
+    $initial_tab      = 'profile';
+    $target_admin_id  = intval($_POST['selected_admin_id'] ?? ($admin_id ?? 0));
+    $new_name         = trim($_POST['admin_name'] ?? '');
+    $new_email        = trim($_POST['admin_email'] ?? '');
+    $new_whatsapp     = trim($_POST['admin_whatsapp'] ?? '');
+    $new_alamat       = trim($_POST['admin_alamat'] ?? '');
+    $new_password     = trim($_POST['admin_new_password'] ?? '');
+
+    if (!empty($new_name) && !empty($new_email)) {
+        if ($target_admin_id > 0) {
+            if (!empty($new_password)) {
+                $stmt_adm = $conn->prepare("UPDATE users SET nama_lengkap = ?, email = ?, whatsapp = ?, alamat = ?, password = ? WHERE id = ? AND role = 'admin'");
+                $stmt_adm->bind_param("sssssi", $new_name, $new_email, $new_whatsapp, $new_alamat, $new_password, $target_admin_id);
+            } else {
+                $stmt_adm = $conn->prepare("UPDATE users SET nama_lengkap = ?, email = ?, whatsapp = ?, alamat = ? WHERE id = ? AND role = 'admin'");
+                $stmt_adm->bind_param("ssssi", $new_name, $new_email, $new_whatsapp, $new_alamat, $target_admin_id);
+            }
+            $ok_adm = $stmt_adm->execute();
+            $stmt_adm->close();
+
+            if ($ok_adm) {
+                if (!$admin_id || intval($admin_id) === $target_admin_id) {
+                    $_SESSION['user_id'] = $target_admin_id;
+                    $_SESSION['user']    = $new_name;
+                    $_SESSION['email']   = $new_email;
+                    $admin_name          = $new_name;
+                    $admin_email         = $new_email;
+                }
+                $msg_success = "Identitas profil administrator berhasil disimpan ke database!";
+                recordLog($conn, $admin_name, "Memperbarui identitas profil admin: $new_name ($new_email)");
+            } else {
+                $msg_error = "Gagal memperbarui profil administrator: " . mysqli_error($conn);
+            }
+        } else {
+            $_SESSION['user']  = $new_name;
+            $_SESSION['email'] = $new_email;
+            $admin_name        = $new_name;
+            $admin_email       = $new_email;
+            $msg_success       = "Profil administrator berhasil diperbarui!";
+            recordLog($conn, $admin_name, "Memperbarui nama profil admin.");
+        }
     } else {
-        $msg_error = "Nama administrator tidak boleh kosong!";
+        $msg_error = "Nama administrator dan email wajib diisi!";
     }
 }
 
-// 6. PROSES UPDATE KONTEN "TENTANG KAMI"
+// 6. PROSES UPDATE KONTEN "TENTANG KAMI" (TERHUBUNG PENUH KE KOLOM about_us)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action_update_about'])) {
-    $judul     = trim($_POST['about_judul'] ?? '');
-    $deskripsi = trim($_POST['about_deskripsi'] ?? '');
-    $visi      = trim($_POST['about_visi'] ?? '');
-    $misi      = trim($_POST['about_misi'] ?? '');
+    $initial_tab      = 'about';
+    $judul            = trim($_POST['about_judul'] ?? '');
+    $deskripsi        = trim($_POST['about_deskripsi'] ?? '');
+    $visi             = trim($_POST['about_visi'] ?? '');
+    $misi             = trim($_POST['about_misi'] ?? '');
+    $tab_umkm_label   = trim($_POST['tab_umkm_label'] ?? 'Pelaku UMKM & Brand');
+    $tab_umkm_desc    = trim($_POST['tab_umkm_desc'] ?? '');
+    $tab_agency_label = trim($_POST['tab_agency_label'] ?? 'Tim & Sistem Marketiva');
+    $tab_agency_desc  = trim($_POST['tab_agency_desc'] ?? '');
+    $three_words_q    = trim($_POST['three_words_quote'] ?? 'KREATIF, TERUKUR, DAN TERPERCAYA — 3 KATA YANG PALING TEPAT MENGGAMBARKAN MARKETIVA');
+    $smm_title        = trim($_POST['smm_title'] ?? '');
+    $smm_desc         = trim($_POST['smm_desc'] ?? '');
+    $content_title    = trim($_POST['content_title'] ?? '');
+    $content_desc     = trim($_POST['content_desc'] ?? '');
+    $ads_title        = trim($_POST['ads_title'] ?? '');
+    $ads_desc         = trim($_POST['ads_desc'] ?? '');
 
     if (!empty($judul) && !empty($deskripsi)) {
-        $check_about = mysqli_query($conn, "SELECT id FROM about_us WHERE id = 1");
+        $check_about = mysqli_query($conn, "SELECT id FROM `about_us` WHERE id = 1");
         if ($check_about && mysqli_num_rows($check_about) > 0) {
-            $stmt_ab = $conn->prepare("UPDATE about_us SET judul = ?, deskripsi = ?, visi = ?, misi = ? WHERE id = 1");
-            $stmt_ab->bind_param("ssss", $judul, $deskripsi, $visi, $misi);
-            $stmt_ab->execute();
+            $stmt_ab = $conn->prepare("UPDATE `about_us` SET
+                judul = ?, deskripsi = ?, visi = ?, misi = ?,
+                tab_umkm_label = ?, tab_umkm_desc = ?, tab_agency_label = ?, tab_agency_desc = ?,
+                three_words_quote = ?, smm_title = ?, smm_desc = ?,
+                content_title = ?, content_desc = ?, ads_title = ?, ads_desc = ?
+                WHERE id = 1");
+            $stmt_ab->bind_param(
+                "sssssssssssssss",
+                $judul, $deskripsi, $visi, $misi,
+                $tab_umkm_label, $tab_umkm_desc, $tab_agency_label, $tab_agency_desc,
+                $three_words_q, $smm_title, $smm_desc,
+                $content_title, $content_desc, $ads_title, $ads_desc
+            );
+            $ok_ab = $stmt_ab->execute();
             $stmt_ab->close();
         } else {
-            $stmt_ab = $conn->prepare("INSERT INTO about_us (id, judul, deskripsi, visi, misi) VALUES (1, ?, ?, ?, ?)");
-            $stmt_ab->bind_param("ssss", $judul, $deskripsi, $visi, $misi);
-            $stmt_ab->execute();
+            $stmt_ab = $conn->prepare("INSERT INTO `about_us` (
+                id, judul, deskripsi, visi, misi,
+                tab_umkm_label, tab_umkm_desc, tab_agency_label, tab_agency_desc,
+                three_words_quote, smm_title, smm_desc,
+                content_title, content_desc, ads_title, ads_desc
+            ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+            $stmt_ab->bind_param(
+                "sssssssssssssss",
+                $judul, $deskripsi, $visi, $misi,
+                $tab_umkm_label, $tab_umkm_desc, $tab_agency_label, $tab_agency_desc,
+                $three_words_q, $smm_title, $smm_desc,
+                $content_title, $content_desc, $ads_title, $ads_desc
+            );
+            $ok_ab = $stmt_ab->execute();
             $stmt_ab->close();
         }
-        $msg_success = "Konten 'Tentang Kami' berhasil diperbarui!";
-        recordLog($conn, $admin_name, "Memperbarui halaman Tentang Kami.");
+
+        if ($ok_ab) {
+            $msg_success = "Konten 'Tentang Kami' berhasil diperbarui dan disinkronkan ke database!";
+            recordLog($conn, $admin_name, "Memperbarui halaman Tentang Kami.");
+        } else {
+            $msg_error = "Gagal memperbarui konten Tentang Kami: " . mysqli_error($conn);
+        }
     } else {
         $msg_error = "Judul dan Deskripsi Tentang Kami tidak boleh kosong!";
     }
@@ -185,7 +339,7 @@ if (isset($_GET['delete_slide'])) {
     exit();
 }
 
-// 9. PROSES UPDATE PAKET HARGA (BARU)
+// 9. PROSES UPDATE PAKET HARGA
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action_save_paket'])) {
     $paket_id    = intval($_POST['paket_id'] ?? 0);
     $nama_paket  = trim($_POST['nama_paket'] ?? '');
@@ -204,7 +358,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action_save_paket']))
     }
 }
 
-// 10. PROSES UPDATE BANNER CTA (BARU)
+// 10. PROSES UPDATE BANNER CTA
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action_save_cta'])) {
     $badge_cta = trim($_POST['cta_badge'] ?? '');
     $judul_cta = trim($_POST['cta_judul'] ?? '');
@@ -228,14 +382,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action_save_cta'])) {
     }
 }
 
-// 11. PROSES TAMBAH ARTIKEL (REVISI: UPLOAD GAMBAR, KALENDER, & SLUG URL)
+// 11. PROSES TAMBAH ARTIKEL
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action_tambah_artikel'])) {
     $title    = trim($_POST['title'] ?? '');
     $category = trim($_POST['category'] ?? '');
     $date     = trim($_POST['date'] ?? '');
     $excerpt  = trim($_POST['excerpt'] ?? '');
-    
-    // Simpan URL artikel apa adanya jika berupa link, atau buat slug otomatis jika kosong
+
     $input_slug = trim($_POST['slug'] ?? '');
     if (!empty($input_slug)) {
         if (strpos($input_slug, 'http://') === 0 || strpos($input_slug, 'https://') === 0) {
@@ -251,7 +404,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action_tambah_artikel
 
     $image_path = 'uploads/default-article.jpg';
 
-    // Proses upload file gambar dari komputer
     if (isset($_FILES['image_file']) && $_FILES['image_file']['error'] === UPLOAD_ERR_OK) {
         $file_tmp   = $_FILES['image_file']['tmp_name'];
         $file_name  = time() . '_' . basename($_FILES['image_file']['name']);
@@ -294,14 +446,79 @@ $count_orders   = mysqli_fetch_assoc(mysqli_query($conn, "SELECT COUNT(*) as tot
 
 $categories_res = mysqli_query($conn, "SELECT * FROM categories ORDER BY nama_kategori ASC");
 $services_res   = mysqli_query($conn, "SELECT s.*, c.nama_kategori FROM services s LEFT JOIN categories c ON s.kategori_id = c.id ORDER BY s.id DESC");
-$users_res      = mysqli_query($conn, "SELECT * FROM users WHERE role = 'user' ORDER BY id DESC");
-$orders_res     = mysqli_query($conn, "SELECT * FROM orders ORDER BY id DESC");
 $logs_res       = mysqli_query($conn, "SELECT * FROM activity_logs ORDER BY id DESC LIMIT 15");
 
-$about_data = mysqli_fetch_assoc(mysqli_query($conn, "SELECT * FROM about_us WHERE id = 1")) ?? ['judul' => '', 'deskripsi' => '', 'visi' => '', 'misi' => ''];
-$slides_res  = mysqli_query($conn, "SELECT * FROM hero_slides ORDER BY id DESC");
-$paket_res   = mysqli_query($conn, "SELECT * FROM paket_harga ORDER BY id ASC");
-$cta_data    = mysqli_fetch_assoc(mysqli_query($conn, "SELECT * FROM cta_banner WHERE id = 1")) ?? ['badge' => '', 'judul' => '', 'deskripsi' => ''];
+// Ambil semua pesanan + gabungkan dengan data user bila kolom nama_lengkap/nama_usaha kosong
+$orders_list   = [];
+$order_counts  = [
+    'all'                  => 0,
+    'Menunggu Pembayaran'  => 0,
+    'Menunggu Konfirmasi'  => 0,
+    'Diproses'             => 0,
+    'Selesai'              => 0,
+    'Dibatalkan'           => 0,
+];
+$orders_res = mysqli_query($conn, "SELECT o.*, u.nama_lengkap AS u_nama, u.nama_umkm AS u_umkm, u.whatsapp AS u_wa FROM orders o LEFT JOIN users u ON (o.user_id = u.id OR (o.user_email <> '' AND o.user_email = u.email)) ORDER BY o.id DESC");
+if ($orders_res) {
+    while ($ord = mysqli_fetch_assoc($orders_res)) {
+        if (empty($ord['nama_lengkap']) && !empty($ord['u_nama'])) {
+            $ord['nama_lengkap'] = $ord['u_nama'];
+        }
+        if (empty($ord['nama_usaha']) && !empty($ord['u_umkm'])) {
+            $ord['nama_usaha'] = $ord['u_umkm'];
+        }
+        if (empty($ord['whatsapp']) && !empty($ord['u_wa'])) {
+            $ord['whatsapp'] = $ord['u_wa'];
+        }
+        $st = trim($ord['status'] ?? 'Menunggu Pembayaran');
+        $orders_list[] = $ord;
+        $order_counts['all']++;
+        if (isset($order_counts[$st])) {
+            $order_counts[$st]++;
+        }
+    }
+}
+
+// Ambil seluruh data pelanggan + statistik pesanan tiap pelanggan
+$customers_list = [];
+$users_res = mysqli_query($conn, "SELECT * FROM users WHERE role = 'user' ORDER BY id DESC");
+if ($users_res) {
+    while ($u = mysqli_fetch_assoc($users_res)) {
+        $uid_int = intval($u['id']);
+        $u_mail  = mysqli_real_escape_string($conn, $u['email'] ?? '');
+        $stat_q  = mysqli_query($conn, "SELECT
+            COUNT(*) AS total_ord,
+            SUM(CASE WHEN status = 'Selesai' THEN 1 ELSE 0 END) AS selesai_ord,
+            SUM(CASE WHEN status NOT IN ('Selesai', 'Dibatalkan') THEN 1 ELSE 0 END) AS aktif_ord
+            FROM orders WHERE user_id = $uid_int OR (user_email <> '' AND user_email = '$u_mail')");
+        $stat_row = $stat_q ? mysqli_fetch_assoc($stat_q) : ['total_ord' => 0, 'selesai_ord' => 0, 'aktif_ord' => 0];
+        $u['total_ord']   = intval($stat_row['total_ord'] ?? 0);
+        $u['selesai_ord'] = intval($stat_row['selesai_ord'] ?? 0);
+        $u['aktif_ord']   = intval($stat_row['aktif_ord'] ?? 0);
+        $customers_list[] = $u;
+    }
+}
+
+// Ambil seluruh akun administrator untuk pengaturan profil
+$admins_list   = [];
+$current_admin = null;
+$admins_res    = mysqli_query($conn, "SELECT * FROM users WHERE role = 'admin' ORDER BY id ASC");
+if ($admins_res) {
+    while ($adm = mysqli_fetch_assoc($admins_res)) {
+        $admins_list[] = $adm;
+        if (($admin_id && intval($adm['id']) === intval($admin_id)) || (!empty($admin_email) && $adm['email'] === $admin_email) || $adm['nama_lengkap'] === $admin_name) {
+            $current_admin = $adm;
+        }
+    }
+}
+if (!$current_admin && !empty($admins_list)) {
+    $current_admin = $admins_list[0];
+}
+
+$about_data   = mysqli_fetch_assoc(mysqli_query($conn, "SELECT * FROM `about_us` WHERE id = 1")) ?? [];
+$slides_res   = mysqli_query($conn, "SELECT * FROM hero_slides ORDER BY id DESC");
+$paket_res    = mysqli_query($conn, "SELECT * FROM paket_harga ORDER BY id ASC");
+$cta_data     = mysqli_fetch_assoc(mysqli_query($conn, "SELECT * FROM cta_banner WHERE id = 1")) ?? ['badge' => '', 'judul' => '', 'deskripsi' => ''];
 $articles_res = mysqli_query($conn, "SELECT * FROM articles ORDER BY id DESC");
 ?>
 <!DOCTYPE html>
@@ -346,7 +563,7 @@ $articles_res = mysqli_query($conn, "SELECT * FROM articles ORDER BY id DESC");
 
   <!-- MAIN CONTAINER -->
   <main class="max-w-[1360px] mx-auto px-6 py-8 w-full flex-1">
-    
+
     <?php if (!empty($msg_success)): ?>
       <div class="mb-6 p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold flex items-center gap-2">
         <span class="material-symbols-outlined text-[20px]">check_circle</span> <?= htmlspecialchars($msg_success); ?>
@@ -377,7 +594,7 @@ $articles_res = mysqli_query($conn, "SELECT * FROM articles ORDER BY id DESC");
 
     <!-- GRID LAYOUT -->
     <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-      
+
       <!-- SIDEBAR -->
       <div class="lg:col-span-3 card-studio space-y-4 p-4">
         <div class="p-4 rounded-2xl bg-gradient-to-br from-slate-900 to-indigo-950 text-white space-y-3 shadow-sm">
@@ -424,7 +641,7 @@ $articles_res = mysqli_query($conn, "SELECT * FROM articles ORDER BY id DESC");
             <span class="material-symbols-outlined text-[20px]">campaign</span> Kelola Banner CTA
           </button>
 
-          <!-- TAB KELOLA ARTIKEL & TIPS (REVISI) -->
+          <!-- TAB KELOLA ARTIKEL & TIPS -->
           <button onclick="switchAdminTab('articles')" id="btnTabArticles" class="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-50 transition-all">
             <span class="material-symbols-outlined text-[20px]">article</span> Kelola Artikel
           </button>
@@ -458,7 +675,7 @@ $articles_res = mysqli_query($conn, "SELECT * FROM articles ORDER BY id DESC");
 
       <!-- KONTEN KANAN -->
       <div class="lg:col-span-9 space-y-6">
-        
+
         <!-- TAB 1: KATALOG & PENCARIAN -->
         <div id="adminTabServices" class="card-studio space-y-6">
           <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
@@ -541,7 +758,7 @@ $articles_res = mysqli_query($conn, "SELECT * FROM articles ORDER BY id DESC");
             <input type="hidden" name="action_save_service" value="1">
             <input type="hidden" name="service_id" id="service_id" value="">
             <input type="hidden" name="old_gambar" id="old_gambar" value="">
-            
+
             <div>
               <label class="block text-xs font-bold text-slate-700 uppercase mb-1.5">Nama Layanan / Paket</label>
               <input type="text" name="nama_layanan" id="nama_layanan" class="input-studio" placeholder="Contoh: Paket Bundling Instagram UMKM" required>
@@ -552,9 +769,9 @@ $articles_res = mysqli_query($conn, "SELECT * FROM articles ORDER BY id DESC");
                 <label class="block text-xs font-bold text-slate-700 uppercase mb-1.5">Pilih Kategori</label>
                 <select name="kategori_id" id="kategori_id" class="input-studio" required>
                   <option value="">-- Pilih Kategori --</option>
-                  <?php 
+                  <?php
                   mysqli_data_seek($categories_res, 0);
-                  while ($cat = mysqli_fetch_assoc($categories_res)): 
+                  while ($cat = mysqli_fetch_assoc($categories_res)):
                   ?>
                     <option value="<?= $cat['id']; ?>"><?= htmlspecialchars($cat['nama_kategori']); ?></option>
                   <?php endwhile; ?>
@@ -583,58 +800,140 @@ $articles_res = mysqli_query($conn, "SELECT * FROM articles ORDER BY id DESC");
           </form>
         </div>
 
-        <!-- TAB 3: PESANAN MASUK -->
+        <!-- TAB 3: PESANAN MASUK (FILTER STATUS + MODERN AKSI & POPUP KONFIRMASI) -->
         <div id="adminTabOrders" class="card-studio space-y-6 hidden">
-          <div class="border-b border-slate-100 pb-4">
-            <h2 class="text-xl font-extrabold text-slate-900">Daftar Pesanan Masuk</h2>
-            <p class="text-slate-500 text-xs mt-0.5">Kelola pesanan jasa digital dari calon klien website.</p>
+          <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+            <div>
+              <h2 class="text-xl font-extrabold text-slate-900">Daftar Pesanan Masuk</h2>
+              <p class="text-slate-500 text-xs mt-0.5">Filter pesanan berdasarkan status transaksi dan perbarui progres pengerjaan.</p>
+            </div>
+            <div class="relative w-full md:w-64">
+              <span class="material-symbols-outlined text-[18px] text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2">search</span>
+              <input type="text" id="orderSearchInput" onkeyup="applyOrderFilters()" placeholder="Cari klien, layanan, ID..." class="h-10 pl-10 pr-3 text-xs border border-slate-300 rounded-xl outline-none focus:border-indigo-500 w-full bg-white">
+            </div>
           </div>
+
+          <!-- CONTROL BAR FILTER STATUS -->
+          <div class="flex flex-wrap items-center gap-2 bg-slate-50 p-2 rounded-2xl border border-slate-200/80" id="orderFilterBar">
+            <button type="button" data-filter="all" onclick="setOrderStatusFilter('all')" class="order-filter-pill px-3.5 py-2 rounded-xl text-xs font-extrabold bg-slate-900 text-white shadow-xs transition-all flex items-center gap-1.5">
+              <span>Semua</span>
+              <span class="px-1.5 py-0.5 rounded-full text-[10px] bg-white/20 text-white"><?= $order_counts['all']; ?></span>
+            </button>
+            <button type="button" data-filter="Menunggu Pembayaran" onclick="setOrderStatusFilter('Menunggu Pembayaran')" class="order-filter-pill px-3.5 py-2 rounded-xl text-xs font-bold text-slate-600 hover:bg-white hover:text-slate-900 transition-all flex items-center gap-1.5">
+              <span class="w-2 h-2 rounded-full bg-amber-500"></span>
+              <span>Menunggu Pembayaran</span>
+              <span class="px-1.5 py-0.5 rounded-full text-[10px] bg-slate-200/80 text-slate-700"><?= $order_counts['Menunggu Pembayaran']; ?></span>
+            </button>
+            <button type="button" data-filter="Menunggu Konfirmasi" onclick="setOrderStatusFilter('Menunggu Konfirmasi')" class="order-filter-pill px-3.5 py-2 rounded-xl text-xs font-bold text-slate-600 hover:bg-white hover:text-slate-900 transition-all flex items-center gap-1.5">
+              <span class="w-2 h-2 rounded-full bg-orange-500"></span>
+              <span>Menunggu Konfirmasi</span>
+              <span class="px-1.5 py-0.5 rounded-full text-[10px] bg-slate-200/80 text-slate-700"><?= $order_counts['Menunggu Konfirmasi']; ?></span>
+            </button>
+            <button type="button" data-filter="Diproses" onclick="setOrderStatusFilter('Diproses')" class="order-filter-pill px-3.5 py-2 rounded-xl text-xs font-bold text-slate-600 hover:bg-white hover:text-slate-900 transition-all flex items-center gap-1.5">
+              <span class="w-2 h-2 rounded-full bg-blue-500"></span>
+              <span>Diproses</span>
+              <span class="px-1.5 py-0.5 rounded-full text-[10px] bg-slate-200/80 text-slate-700"><?= $order_counts['Diproses']; ?></span>
+            </button>
+            <button type="button" data-filter="Selesai" onclick="setOrderStatusFilter('Selesai')" class="order-filter-pill px-3.5 py-2 rounded-xl text-xs font-bold text-slate-600 hover:bg-white hover:text-slate-900 transition-all flex items-center gap-1.5">
+              <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+              <span>Selesai</span>
+              <span class="px-1.5 py-0.5 rounded-full text-[10px] bg-slate-200/80 text-slate-700"><?= $order_counts['Selesai']; ?></span>
+            </button>
+            <button type="button" data-filter="Dibatalkan" onclick="setOrderStatusFilter('Dibatalkan')" class="order-filter-pill px-3.5 py-2 rounded-xl text-xs font-bold text-slate-600 hover:bg-white hover:text-slate-900 transition-all flex items-center gap-1.5">
+              <span class="w-2 h-2 rounded-full bg-rose-500"></span>
+              <span>Dibatalkan</span>
+              <span class="px-1.5 py-0.5 rounded-full text-[10px] bg-slate-200/80 text-slate-700"><?= $order_counts['Dibatalkan']; ?></span>
+            </button>
+          </div>
+
           <div class="overflow-x-auto rounded-2xl border border-slate-200">
             <table class="w-full text-left text-xs">
               <thead class="bg-slate-50 border-b border-slate-200 text-slate-700 uppercase font-extrabold text-[10px]">
                 <tr>
                   <th class="py-3.5 px-4">Klien / Usaha</th>
                   <th class="py-3.5 px-4">Layanan Dipesan</th>
-                  <th class="py-3.5 px-4">WhatsApp</th>
-                  <th class="py-3.5 px-4">Catatan</th>
+                  <th class="py-3.5 px-4">Kontak</th>
                   <th class="py-3.5 px-4">Status</th>
-                  <th class="py-3.5 px-4 text-center">Aksi / Update</th>
+                  <th class="py-3.5 px-4 text-center">Aksi / Update Status</th>
                 </tr>
               </thead>
-              <tbody class="divide-y divide-slate-100 font-medium text-slate-700">
-                <?php if (mysqli_num_rows($orders_res) > 0): ?>
-                  <?php while ($ord = mysqli_fetch_assoc($orders_res)): ?>
-                    <tr class="hover:bg-slate-50">
-                      <td class="py-3 px-4">
-                        <p class="font-bold text-slate-900"><?= htmlspecialchars($ord['nama_lengkap'] ?? ''); ?></p>
-                        <p class="text-[10px] text-slate-400"><?= htmlspecialchars($ord['nama_usaha'] ?? ''); ?></p>
+              <tbody class="divide-y divide-slate-100 font-medium text-slate-700" id="ordersTableBody">
+                <?php if (count($orders_list) > 0): ?>
+                  <?php foreach ($orders_list as $ord): ?>
+                    <?php
+                      $st_val   = trim($ord['status'] ?? 'Menunggu Pembayaran');
+                      $kode_ord = $ord['order_id'] ?? ('#' . $ord['id']);
+                      $badge_cls = 'bg-amber-50 text-amber-700 border-amber-200';
+                      $dot_cls   = 'bg-amber-500';
+                      if ($st_val === 'Selesai') {
+                          $badge_cls = 'bg-emerald-50 text-emerald-700 border-emerald-200';
+                          $dot_cls   = 'bg-emerald-500';
+                      } elseif ($st_val === 'Diproses') {
+                          $badge_cls = 'bg-blue-50 text-blue-700 border-blue-200';
+                          $dot_cls   = 'bg-blue-500';
+                      } elseif ($st_val === 'Menunggu Konfirmasi') {
+                          $badge_cls = 'bg-orange-50 text-orange-700 border-orange-200';
+                          $dot_cls   = 'bg-orange-500';
+                      } elseif ($st_val === 'Dibatalkan') {
+                          $badge_cls = 'bg-rose-50 text-rose-700 border-rose-200';
+                          $dot_cls   = 'bg-rose-500';
+                      }
+                      $search_blob = strtolower(
+                          ($ord['nama_lengkap'] ?? '') . ' ' .
+                          ($ord['nama_usaha'] ?? '') . ' ' .
+                          ($ord['nama_layanan'] ?? '') . ' ' .
+                          ($ord['user_email'] ?? '') . ' ' .
+                          $kode_ord
+                      );
+                    ?>
+                    <tr class="hover:bg-slate-50/90 transition-colors order-data-row"
+                        data-status="<?= htmlspecialchars($st_val); ?>"
+                        data-search="<?= htmlspecialchars($search_blob); ?>">
+                      <td class="py-3.5 px-4">
+                        <p class="font-extrabold text-slate-900"><?= htmlspecialchars($ord['nama_lengkap'] ?: 'Pelanggan Marketiva'); ?></p>
+                        <p class="text-[11px] font-semibold text-indigo-600"><?= htmlspecialchars($ord['nama_usaha'] ?: 'UMKM Mitra'); ?></p>
+                        <p class="text-[10px] font-mono text-slate-400 mt-0.5"><?= htmlspecialchars($kode_ord); ?></p>
                       </td>
-                      <td class="py-3 px-4 font-bold text-indigo-600"><?= htmlspecialchars($ord['nama_layanan']); ?></td>
-                      <td class="py-3 px-4"><?= htmlspecialchars($ord['user_email'] ?? '-'); ?></td>
-                      <td class="py-3 px-4 text-slate-500 italic"><?= htmlspecialchars($ord['kategori'] ?? '-'); ?></td>
-                      <td class="py-3 px-4">
-                        <span class="px-2.5 py-1 rounded-md font-extrabold text-[10px] 
-                          <?= $ord['status'] === 'Selesai' ? 'bg-emerald-50 text-emerald-700' : ($ord['status'] === 'Diproses' ? 'bg-amber-50 text-amber-700' : 'bg-rose-50 text-rose-700'); ?>">
-                          <?= htmlspecialchars($ord['status']); ?>
+                      <td class="py-3.5 px-4">
+                        <p class="font-bold text-slate-900"><?= htmlspecialchars($ord['nama_layanan']); ?></p>
+                        <div class="flex items-center gap-2 mt-1">
+                          <span class="px-2 py-0.5 rounded bg-slate-100 text-slate-600 text-[10px] font-bold"><?= htmlspecialchars($ord['kategori'] ?? 'Digital Marketing'); ?></span>
+                          <span class="text-[11px] font-extrabold text-emerald-600">Rp <?= number_format(floatval($ord['harga'] ?? 0), 0, ',', '.'); ?></span>
+                        </div>
+                      </td>
+                      <td class="py-3.5 px-4">
+                        <p class="text-slate-700 font-semibold"><?= htmlspecialchars($ord['user_email'] ?? '-'); ?></p>
+                        <?php if (!empty($ord['whatsapp'])): ?>
+                          <p class="text-[11px] text-slate-400 mt-0.5"><?= htmlspecialchars($ord['whatsapp']); ?></p>
+                        <?php endif; ?>
+                      </td>
+                      <td class="py-3.5 px-4">
+                        <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full border font-extrabold text-[11px] <?= $badge_cls; ?>">
+                          <span class="w-1.5 h-1.5 rounded-full <?= $dot_cls; ?>"></span>
+                          <?= htmlspecialchars($st_val); ?>
                         </span>
                       </td>
-                      <td class="py-3 px-4 text-center">
-                        <div class="flex items-center justify-center gap-1.5">
-                          <button type="button" onclick='openOrderDetail(<?= json_encode($ord); ?>)' class="px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 hover:bg-indigo-100 font-bold text-[11px]">
-                            Detail
+                      <td class="py-3.5 px-4 text-center">
+                        <div class="inline-flex items-center justify-center gap-2">
+                          <button type="button" onclick='openOrderDetail(<?= json_encode($ord); ?>)' class="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs inline-flex items-center gap-1 transition-all">
+                            <span class="material-symbols-outlined text-[15px]">visibility</span>
+                            <span>Detail</span>
                           </button>
-                          <select onchange="location.href='admin-dashboard.php?order_id=<?= $ord['id']; ?>&update_order_status='+this.value" class="text-[11px] font-bold border border-slate-300 rounded-lg p-1 bg-white">
-                            <option value="">-- Ubah Status --</option>
-                            <option value="Menunggu Konfirmasi">Menunggu</option>
-                            <option value="Diproses">Diproses</option>
-                            <option value="Selesai">Selesai</option>
-                          </select>
+                          <button type="button" onclick='openStatusUpdateModal(<?= json_encode($ord); ?>)' class="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-xs inline-flex items-center gap-1.5 transition-all">
+                            <span class="material-symbols-outlined text-[15px]">sync_alt</span>
+                            <span>Ubah Status</span>
+                          </button>
                         </div>
                       </td>
                     </tr>
-                  <?php endwhile; ?>
+                  <?php endforeach; ?>
+                  <tr id="ordersEmptyFilterRow" class="hidden">
+                    <td colspan="5" class="py-12 text-center text-slate-400 font-bold">
+                      Tidak ada pesanan yang sesuai dengan filter status atau pencarian ini.
+                    </td>
+                  </tr>
                 <?php else: ?>
-                  <tr><td colspan="6" class="py-8 text-center text-slate-400 font-bold">Belum ada pesanan masuk dari katalog.</td></tr>
+                  <tr><td colspan="5" class="py-10 text-center text-slate-400 font-bold">Belum ada pesanan masuk dari katalog.</td></tr>
                 <?php endif; ?>
               </tbody>
             </table>
@@ -657,22 +956,20 @@ $articles_res = mysqli_query($conn, "SELECT * FROM articles ORDER BY id DESC");
 
           <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
             <div class="lg:col-span-8 space-y-6">
-              <!-- Status & Verifikasi Pembayaran -->
               <div class="p-5 rounded-2xl border border-slate-200 bg-slate-50/50 space-y-4">
                 <h3 class="text-sm font-extrabold text-slate-900 border-b border-slate-200 pb-2.5">
                   Status & Verifikasi Pembayaran
                 </h3>
                 <div class="p-4 rounded-xl bg-white border border-slate-200 text-xs space-y-1">
                   <p class="font-extrabold text-slate-900">Metode Pembayaran</p>
-                  <p id="detailMetodeBayar" class="text-slate-600">Transfer Manual / Konfirmasi Admin</p>
+                  <p id="detailMetodeBayar" class="text-slate-600">Midtrans Payment Gateway / Transfer Manual</p>
                 </div>
                 <div class="p-4 rounded-xl bg-white border border-slate-200 text-xs space-y-1">
                   <p class="font-extrabold text-slate-900">Bukti Pembayaran</p>
-                  <p id="detailBuktiBayar" class="text-slate-500">Menunggu konfirmasi bukti pembayaran dari pelanggan.</p>
+                  <p id="detailBuktiBayar" class="text-slate-500">Status transaksi tercatat otomatis di database pesanan.</p>
                 </div>
               </div>
 
-              <!-- Daftar Layanan yang Dipesan -->
               <div class="p-5 rounded-2xl border border-slate-200 bg-slate-50/50 space-y-4">
                 <h3 class="text-sm font-extrabold text-slate-900 border-b border-slate-200 pb-2.5">
                   Daftar Layanan yang Dipesan
@@ -704,7 +1001,6 @@ $articles_res = mysqli_query($conn, "SELECT * FROM articles ORDER BY id DESC");
             </div>
 
             <div class="lg:col-span-4 space-y-6">
-              <!-- Kontak Pembeli -->
               <div class="p-5 rounded-2xl border border-slate-200 bg-slate-50/50 space-y-4">
                 <h3 class="text-sm font-extrabold text-slate-900 border-b border-slate-200 pb-2.5">
                   Kontak Pembeli
@@ -732,7 +1028,6 @@ $articles_res = mysqli_query($conn, "SELECT * FROM articles ORDER BY id DESC");
                 </a>
               </div>
 
-              <!-- Update Status Pesanan -->
               <div class="p-5 rounded-2xl border border-slate-200 bg-slate-50/50 space-y-4">
                 <h3 class="text-sm font-extrabold text-slate-900 border-b border-slate-200 pb-2.5">
                   Update Status Pesanan
@@ -741,9 +1036,11 @@ $articles_res = mysqli_query($conn, "SELECT * FROM articles ORDER BY id DESC");
                   <div>
                     <label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">Status Pesanan</label>
                     <select id="detailStatusSelect" class="input-studio bg-white text-xs font-bold">
+                      <option value="Menunggu Pembayaran">Menunggu Pembayaran</option>
                       <option value="Menunggu Konfirmasi">Menunggu Konfirmasi</option>
                       <option value="Diproses">Diproses</option>
                       <option value="Selesai">Selesai</option>
+                      <option value="Dibatalkan">Dibatalkan</option>
                     </select>
                   </div>
                   <button type="button" onclick="saveOrderDetailStatus()" class="w-full py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold">
@@ -755,29 +1052,136 @@ $articles_res = mysqli_query($conn, "SELECT * FROM articles ORDER BY id DESC");
           </div>
         </div>
 
-        <!-- TAB 4: USERS -->
+        <!-- TAB 4: DATA PELANGGAN -->
         <div id="adminTabUsers" class="card-studio space-y-6 hidden">
-          <div class="border-b border-slate-100 pb-4"><h2 class="text-xl font-extrabold text-slate-900">Data Pelanggan UMKM</h2></div>
-          <div class="overflow-x-auto rounded-2xl border border-slate-200">
-            <table class="w-full text-left text-xs">
-              <thead class="bg-slate-50 border-b border-slate-200 text-slate-700 uppercase font-extrabold text-[10px]">
-                <tr><th class="py-3.5 px-4">Nama Pelanggan</th><th class="py-3.5 px-4">Email</th><th class="py-3.5 px-4">WhatsApp</th></tr>
-              </thead>
-              <tbody class="divide-y divide-slate-100 font-medium text-slate-700">
-                <?php if (mysqli_num_rows($users_res) > 0): ?>
-                  <?php while ($u = mysqli_fetch_assoc($users_res)): ?>
-                    <tr class="hover:bg-slate-50">
-                      <td class="py-3 px-4 font-bold text-slate-900"><?= htmlspecialchars($u['nama_lengkap']); ?></td>
-                      <td class="py-3 px-4"><?= htmlspecialchars($u['email']); ?></td>
-                      <td class="py-3 px-4"><?= htmlspecialchars($u['whatsapp'] ?? '-'); ?></td>
-                    </tr>
-                  <?php endwhile; ?>
-                <?php else: ?>
-                  <tr><td colspan="3" class="py-8 text-center text-slate-400 font-bold">Belum ada pelanggan terdaftar.</td></tr>
-                <?php endif; ?>
-              </tbody>
-            </table>
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+            <div>
+              <h2 class="text-xl font-extrabold text-slate-900">Data Pelanggan UMKM</h2>
+              <p class="text-slate-500 text-xs mt-0.5">Ringkasan KPI profil usaha, kontak lengkap, dan akses pratinjau profil read-only pelanggan.</p>
+            </div>
+            <div class="flex items-center gap-3">
+              <div class="relative">
+                <span class="material-symbols-outlined text-[18px] text-slate-400 absolute left-3 top-1/2 -translate-y-1/2">search</span>
+                <input type="text" id="customerSearchInput" onkeyup="filterCustomerCards()" placeholder="Cari pelanggan / bisnis..." class="h-10 pl-9 pr-3 text-xs border border-slate-300 rounded-xl outline-none focus:border-indigo-500 w-56 bg-white">
+              </div>
+              <span class="px-3 py-2 rounded-xl bg-indigo-50 text-indigo-700 border border-indigo-200 text-xs font-extrabold whitespace-nowrap">
+                <?= count($customers_list); ?> Pelanggan
+              </span>
+            </div>
           </div>
+
+          <?php if (count($customers_list) > 0): ?>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-5" id="customersKpiGrid">
+              <?php
+                $avatar_palettes = [
+                    'from-rose-500 to-pink-600',
+                    'from-indigo-500 to-blue-600',
+                    'from-emerald-500 to-teal-600',
+                    'from-amber-500 to-orange-600',
+                ];
+              ?>
+              <?php foreach ($customers_list as $idx => $u): ?>
+                <?php
+                  $palette    = $avatar_palettes[$idx % count($avatar_palettes)];
+                  $bisnis_lbl = !empty(trim((string)($u['nama_umkm'] ?? ''))) ? $u['nama_umkm'] : 'Belum mengisi nama bisnis';
+                  $wa_clean   = preg_replace('/[^0-9]/', '', (string)($u['whatsapp'] ?? ''));
+                  if (strpos($wa_clean, '0') === 0) {
+                      $wa_clean = '62' . substr($wa_clean, 1);
+                  }
+                  $cust_search = strtolower(
+                      ($u['nama_lengkap'] ?? '') . ' ' .
+                      ($u['nama_umkm'] ?? '') . ' ' .
+                      ($u['email'] ?? '') . ' ' .
+                      ($u['whatsapp'] ?? '') . ' ' .
+                      ($u['alamat'] ?? '')
+                  );
+                ?>
+                <div class="customer-kpi-card rounded-2xl border border-slate-200 bg-white hover:border-indigo-300 hover:shadow-md transition-all p-5 flex flex-col justify-between gap-4"
+                     data-search="<?= htmlspecialchars($cust_search); ?>">
+                  <div class="flex items-start justify-between gap-3">
+                    <div class="flex items-center gap-3.5 min-w-0">
+                      <div class="w-12 h-12 rounded-2xl bg-gradient-to-br <?= $palette; ?> text-white flex items-center justify-center flex-shrink-0 shadow-sm">
+                        <span class="material-symbols-outlined text-[24px]">person</span>
+                      </div>
+                      <div class="min-w-0">
+                        <div class="flex items-center gap-2">
+                          <h3 class="text-sm font-extrabold text-slate-900 truncate"><?= htmlspecialchars($u['nama_lengkap']); ?></h3>
+                          <span class="px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 text-[10px] font-bold">#<?= intval($u['id']); ?></span>
+                        </div>
+                        <p class="text-xs font-bold text-indigo-600 flex items-center gap-1 mt-0.5 truncate">
+                          <span class="material-symbols-outlined text-[15px]">storefront</span>
+                          <span class="truncate"><?= htmlspecialchars($bisnis_lbl); ?></span>
+                        </p>
+                      </div>
+                    </div>
+
+                    <span class="px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-extrabold flex-shrink-0">
+                      UMKM Aktif
+                    </span>
+                  </div>
+
+                  <div class="grid grid-cols-3 gap-2.5 p-3 rounded-xl bg-slate-50 border border-slate-200/80 text-center">
+                    <div>
+                      <p class="text-[10px] font-bold text-slate-400 uppercase">Total Order</p>
+                      <p class="text-sm font-extrabold text-slate-900 mt-0.5"><?= $u['total_ord']; ?></p>
+                    </div>
+                    <div class="border-x border-slate-200">
+                      <p class="text-[10px] font-bold text-slate-400 uppercase">On Progress</p>
+                      <p class="text-sm font-extrabold text-amber-600 mt-0.5"><?= $u['aktif_ord']; ?></p>
+                    </div>
+                    <div>
+                      <p class="text-[10px] font-bold text-slate-400 uppercase">Selesai</p>
+                      <p class="text-sm font-extrabold text-emerald-600 mt-0.5"><?= $u['selesai_ord']; ?></p>
+                    </div>
+                  </div>
+
+                  <div class="space-y-2 text-xs">
+                    <div class="flex items-center justify-between gap-2 py-1 border-b border-slate-100">
+                      <span class="text-slate-400 font-semibold flex items-center gap-1.5">
+                        <span class="material-symbols-outlined text-[15px]">mail</span> Email
+                      </span>
+                      <span class="font-bold text-slate-800 truncate"><?= htmlspecialchars($u['email']); ?></span>
+                    </div>
+                    <div class="flex items-center justify-between gap-2 py-1 border-b border-slate-100">
+                      <span class="text-slate-400 font-semibold flex items-center gap-1.5">
+                        <span class="material-symbols-outlined text-[15px]">call</span> WhatsApp
+                      </span>
+                      <span class="font-bold text-slate-800"><?= htmlspecialchars(!empty($u['whatsapp']) ? $u['whatsapp'] : '-'); ?></span>
+                    </div>
+                    <div class="flex items-start justify-between gap-2 py-1">
+                      <span class="text-slate-400 font-semibold flex items-center gap-1.5 flex-shrink-0">
+                        <span class="material-symbols-outlined text-[15px]">location_on</span> Alamat
+                      </span>
+                      <span class="font-semibold text-slate-600 text-right line-clamp-2">
+                        <?= htmlspecialchars(!empty(trim((string)($u['alamat'] ?? ''))) ? $u['alamat'] : 'Alamat usaha belum dilengkapi'); ?>
+                      </span>
+                    </div>
+                  </div>
+
+                  <div class="pt-2 border-t border-slate-100 flex items-center gap-2.5">
+                    <a href="admin-dashboard.php?view_user=<?= intval($u['id']); ?>"
+                       class="flex-1 py-2.5 px-3.5 rounded-xl bg-slate-900 hover:bg-indigo-600 text-white font-bold text-xs transition-all flex items-center justify-center gap-1.5 shadow-xs">
+                      <span class="material-symbols-outlined text-[16px]">visibility</span>
+                      <span>Lihat Profil User</span>
+                    </a>
+
+                    <?php if (!empty($wa_clean)): ?>
+                      <a href="https://wa.me/<?= htmlspecialchars($wa_clean); ?>" target="_blank" rel="noopener noreferrer"
+                         class="py-2.5 px-3.5 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 font-bold text-xs transition-all flex items-center justify-center gap-1"
+                         title="Chat WhatsApp Pelanggan">
+                        <span class="material-symbols-outlined text-[16px]">chat</span>
+                        <span>WA</span>
+                      </a>
+                    <?php endif; ?>
+                  </div>
+                </div>
+              <?php endforeach; ?>
+            </div>
+          <?php else: ?>
+            <div class="py-12 text-center text-slate-400 font-bold bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+              Belum ada pelanggan terdaftar.
+            </div>
+          <?php endif; ?>
         </div>
 
         <!-- TAB KELOLA HERO SLIDES BERANDA -->
@@ -853,14 +1257,14 @@ $articles_res = mysqli_query($conn, "SELECT * FROM articles ORDER BY id DESC");
           </div>
 
           <div class="space-y-6">
-            <?php 
+            <?php
             mysqli_data_seek($paket_res, 0);
-            while ($pkt = mysqli_fetch_assoc($paket_res)): 
+            while ($pkt = mysqli_fetch_assoc($paket_res)):
             ?>
               <form method="POST" action="admin-dashboard.php" class="p-5 rounded-2xl border border-slate-200 bg-slate-50/50 space-y-4">
                 <input type="hidden" name="action_save_paket" value="1">
                 <input type="hidden" name="paket_id" value="<?= $pkt['id']; ?>">
-                
+
                 <div class="flex items-center justify-between">
                   <h3 class="text-sm font-extrabold text-slate-800">Edit Paket ID #<?= $pkt['id']; ?>: <?= htmlspecialchars($pkt['nama_paket']); ?></h3>
                   <label class="flex items-center gap-2 text-xs font-bold text-slate-700 cursor-pointer">
@@ -906,7 +1310,7 @@ $articles_res = mysqli_query($conn, "SELECT * FROM articles ORDER BY id DESC");
 
           <form method="POST" action="admin-dashboard.php" class="space-y-4">
             <input type="hidden" name="action_save_cta" value="1">
-            
+
             <div>
               <label class="block text-xs font-bold text-slate-700 uppercase mb-1.5">Badge Teks</label>
               <input type="text" name="cta_badge" value="<?= htmlspecialchars($cta_data['badge'] ?? ''); ?>" class="input-studio" required>
@@ -926,17 +1330,16 @@ $articles_res = mysqli_query($conn, "SELECT * FROM articles ORDER BY id DESC");
           </form>
         </div>
 
-        <!-- TAB KELOLA ARTIKEL & TIPS (DENGAN REVISI LENGKAP) -->
+        <!-- TAB KELOLA ARTIKEL & TIPS -->
         <div id="adminTabArticles" class="card-studio space-y-6 hidden">
           <div class="border-b border-slate-100 pb-4">
             <h2 class="text-xl font-extrabold text-slate-900">Kelola Artikel & Tips Web</h2>
             <p class="text-slate-500 text-xs mt-0.5">Tambah artikel dengan filter kalender, dropdown kategori layanan, unggah gambar komputer, dan custom URL slug.</p>
           </div>
 
-          <!-- FORM TAMBAH ARTIKEL -->
           <form method="POST" action="admin-dashboard.php" enctype="multipart/form-data" class="p-5 rounded-2xl border border-slate-200 bg-slate-50/50 space-y-4">
             <input type="hidden" name="action_tambah_artikel" value="1">
-            
+
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">Judul Artikel</label>
@@ -981,7 +1384,6 @@ $articles_res = mysqli_query($conn, "SELECT * FROM articles ORDER BY id DESC");
             </button>
           </form>
 
-          <!-- TABEL DAFTAR ARTIKEL -->
           <div class="overflow-x-auto rounded-2xl border border-slate-200 mt-6">
             <table class="w-full text-left text-xs">
               <thead class="bg-slate-50 border-b border-slate-200 text-slate-700 uppercase font-extrabold text-[10px]">
@@ -1023,26 +1425,111 @@ $articles_res = mysqli_query($conn, "SELECT * FROM articles ORDER BY id DESC");
           </div>
         </div>
 
-        <!-- TAB KELOLA TENTANG KAMI -->
+        <!-- TAB KELOLA TENTANG KAMI (TERSINKRON KE DB about_us) -->
         <div id="adminTabAbout" class="card-studio space-y-6 hidden">
-          <div class="border-b border-slate-100 pb-4">
-            <h2 class="text-xl font-extrabold text-slate-900">Kelola Artikel "Tentang Kami"</h2>
-            <p class="text-slate-500 text-xs mt-0.5">Perbarui profil agensi, visi, dan misi yang akan tampil secara dinamis di halaman about.php.</p>
+          <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4">
+            <div>
+              <h2 class="text-xl font-extrabold text-slate-900">Kelola Halaman "Tentang Kami"</h2>
+              <p class="text-slate-500 text-xs mt-0.5">Perbarui profil agensi, tab audiens, 3 kata utama, rincian 3 layanan, serta visi & misi yang tersinkron dengan about.php.</p>
+            </div>
+            <a href="about.php" target="_blank" class="px-4 py-2 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs inline-flex items-center gap-1.5">
+              <span class="material-symbols-outlined text-[16px]">open_in_new</span> Pratinjau about.php
+            </a>
           </div>
 
-          <form method="POST" action="admin-dashboard.php" class="space-y-4">
+          <form method="POST" action="admin-dashboard.php" class="space-y-6">
             <input type="hidden" name="action_update_about" value="1">
-            
-            <div>
-              <label class="block text-xs font-bold text-slate-700 uppercase mb-1.5">Judul Utama Halaman</label>
-              <input type="text" name="about_judul" value="<?= htmlspecialchars($about_data['judul']); ?>" class="input-studio" required>
+
+            <!-- 1. JUDUL & DESKRIPSI UTAMA -->
+            <div class="p-4 rounded-2xl bg-slate-50/80 border border-slate-200 space-y-4">
+              <p class="text-xs font-extrabold text-slate-800 uppercase">1. Profil Utama</p>
+              <div>
+                <label class="block text-xs font-bold text-slate-700 uppercase mb-1.5">Judul Utama Halaman</label>
+                <input type="text" name="about_judul" value="<?= htmlspecialchars($about_data['judul'] ?? 'Tentang Marketiva Digital Agency'); ?>" class="input-studio bg-white" required>
+              </div>
+
+              <div>
+                <label class="block text-xs font-bold text-slate-700 uppercase mb-1.5">Deskripsi Profil Utama</label>
+                <textarea name="about_deskripsi" rows="4" class="input-studio bg-white" required><?= htmlspecialchars($about_data['deskripsi'] ?? ''); ?></textarea>
+              </div>
             </div>
 
-            <div>
-              <label class="block text-xs font-bold text-slate-700 uppercase mb-1.5">Deskripsi Profil Utama</label>
-              <textarea name="about_deskripsi" rows="5" class="input-studio" required><?= htmlspecialchars($about_data['deskripsi']); ?></textarea>
+            <!-- 2. TAB INTERAKTIF DUA SISI -->
+            <div class="p-4 rounded-2xl bg-rose-50/40 border border-rose-200/70 space-y-4">
+              <p class="text-xs font-extrabold text-[#E11D48] uppercase">2. Tab Interaktif (Pelaku UMKM vs Tim Marketiva)</p>
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="p-4 rounded-xl bg-white border border-slate-200 space-y-3">
+                  <div>
+                    <label class="block text-xs font-bold text-slate-700 uppercase mb-1.5">Label Tab Kiri</label>
+                    <input type="text" name="tab_umkm_label" value="<?= htmlspecialchars($about_data['tab_umkm_label'] ?? 'Pelaku UMKM & Brand'); ?>" class="input-studio" required>
+                  </div>
+                  <div>
+                    <label class="block text-xs font-bold text-slate-700 uppercase mb-1.5">Deskripsi Tab Kiri</label>
+                    <textarea name="tab_umkm_desc" rows="3" class="input-studio"><?= htmlspecialchars($about_data['tab_umkm_desc'] ?? ''); ?></textarea>
+                  </div>
+                </div>
+
+                <div class="p-4 rounded-xl bg-white border border-slate-200 space-y-3">
+                  <div>
+                    <label class="block text-xs font-bold text-slate-700 uppercase mb-1.5">Label Tab Kanan</label>
+                    <input type="text" name="tab_agency_label" value="<?= htmlspecialchars($about_data['tab_agency_label'] ?? 'Tim & Sistem Marketiva'); ?>" class="input-studio" required>
+                  </div>
+                  <div>
+                    <label class="block text-xs font-bold text-slate-700 uppercase mb-1.5">Deskripsi Tab Kanan</label>
+                    <textarea name="tab_agency_desc" rows="3" class="input-studio"><?= htmlspecialchars($about_data['tab_agency_desc'] ?? ''); ?></textarea>
+                  </div>
+                </div>
+              </div>
             </div>
 
+            <!-- 3. 3 KATA UTAMA & RINCIAN 3 LAYANAN -->
+            <div class="p-4 rounded-2xl bg-indigo-50/40 border border-indigo-200/70 space-y-4">
+              <p class="text-xs font-extrabold text-indigo-700 uppercase">3. Kutipan 3 Kata Utama & Rincian 3 Layanan</p>
+              <div>
+                <label class="block text-xs font-bold text-slate-700 uppercase mb-1.5">Kutipan 3 Kata Utama</label>
+                <input type="text" name="three_words_quote" value="<?= htmlspecialchars($about_data['three_words_quote'] ?? 'KREATIF, TERUKUR, DAN TERPERCAYA — 3 KATA YANG PALING TEPAT MENGGAMBARKAN MARKETIVA'); ?>" class="input-studio bg-white" required>
+              </div>
+
+              <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div class="p-4 rounded-xl bg-white border border-slate-200 space-y-3">
+                  <span class="inline-block px-2.5 py-0.5 rounded bg-sky-100 text-sky-700 text-[10px] font-extrabold uppercase">Social Media Management</span>
+                  <div>
+                    <label class="block text-[11px] font-bold text-slate-700 uppercase mb-1">Judul Rincian</label>
+                    <input type="text" name="smm_title" value="<?= htmlspecialchars($about_data['smm_title'] ?? 'Pengelolaan Akun Instagram & TikTok Terjadwal'); ?>" class="input-studio">
+                  </div>
+                  <div>
+                    <label class="block text-[11px] font-bold text-slate-700 uppercase mb-1">Deskripsi Rincian</label>
+                    <textarea name="smm_desc" rows="3" class="input-studio"><?= htmlspecialchars($about_data['smm_desc'] ?? ''); ?></textarea>
+                  </div>
+                </div>
+
+                <div class="p-4 rounded-xl bg-white border border-slate-200 space-y-3">
+                  <span class="inline-block px-2.5 py-0.5 rounded bg-rose-100 text-[#E11D48] text-[10px] font-extrabold uppercase">Content Creation & Design</span>
+                  <div>
+                    <label class="block text-[11px] font-bold text-slate-700 uppercase mb-1">Judul Rincian</label>
+                    <input type="text" name="content_title" value="<?= htmlspecialchars($about_data['content_title'] ?? 'Desain Visual Kreatif, Carousel & Video Pendek Reels'); ?>" class="input-studio">
+                  </div>
+                  <div>
+                    <label class="block text-[11px] font-bold text-slate-700 uppercase mb-1">Deskripsi Rincian</label>
+                    <textarea name="content_desc" rows="3" class="input-studio"><?= htmlspecialchars($about_data['content_desc'] ?? ''); ?></textarea>
+                  </div>
+                </div>
+
+                <div class="p-4 rounded-xl bg-white border border-slate-200 space-y-3">
+                  <span class="inline-block px-2.5 py-0.5 rounded bg-amber-100 text-amber-800 text-[10px] font-extrabold uppercase">Digital Ads</span>
+                  <div>
+                    <label class="block text-[11px] font-bold text-slate-700 uppercase mb-1">Judul Rincian</label>
+                    <input type="text" name="ads_title" value="<?= htmlspecialchars($about_data['ads_title'] ?? 'Iklan Berbayar Meta Ads & TikTok Ads Tertarget'); ?>" class="input-studio">
+                  </div>
+                  <div>
+                    <label class="block text-[11px] font-bold text-slate-700 uppercase mb-1">Deskripsi Rincian</label>
+                    <textarea name="ads_desc" rows="3" class="input-studio"><?= htmlspecialchars($about_data['ads_desc'] ?? ''); ?></textarea>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 4. VISI & MISI -->
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label class="block text-xs font-bold text-slate-700 uppercase mb-1.5">Visi Perusahaan</label>
@@ -1062,27 +1549,115 @@ $articles_res = mysqli_query($conn, "SELECT * FROM articles ORDER BY id DESC");
 
         <!-- TAB 5: PENGATURAN PROFIL & LOG AKTIVITAS -->
         <div id="adminTabProfile" class="card-studio space-y-8 hidden">
-          <div class="border-b border-slate-100 pb-4">
-            <h2 class="text-xl font-extrabold text-slate-900">Pengaturan Profil & Log Aktivitas</h2>
-            <p class="text-slate-500 text-xs mt-0.5">Kelola identitas akun dan pantau rekam jejak aktivitas administrator.</p>
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
+            <div>
+              <h2 class="text-xl font-extrabold text-slate-900">Pengaturan Profil & Log Aktivitas</h2>
+              <p class="text-slate-500 text-xs mt-0.5">Kelola identitas akun administrator dan pantau rekam jejak aktivitas sistem.</p>
+            </div>
+            <span class="self-start sm:self-auto px-3 py-1.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 text-[11px] font-extrabold flex items-center gap-1.5">
+              <span class="w-2 h-2 rounded-full bg-indigo-600"></span> Tersinkron ke Database
+            </span>
           </div>
 
-          <form method="POST" action="admin-dashboard.php" class="space-y-4">
-            <input type="hidden" name="action_update_admin" value="1">
-            <div>
-              <label class="block text-xs font-bold text-slate-700 uppercase mb-1.5">Nama Administrator</label>
-              <input type="text" name="admin_name" value="<?= htmlspecialchars($admin_name); ?>" class="input-studio" required>
+          <div class="p-6 rounded-2xl bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-sm">
+            <div class="flex items-center gap-4">
+              <div id="adminProfileAvatarPreview" class="w-14 h-14 rounded-2xl bg-indigo-600 text-white flex items-center justify-center font-extrabold text-xl shadow-md flex-shrink-0">
+                <?= strtoupper(substr($current_admin['nama_lengkap'] ?? $admin_name, 0, 1)); ?>
+              </div>
+              <div>
+                <div class="flex flex-wrap items-center gap-2">
+                  <h3 id="adminProfileNamePreview" class="text-base font-extrabold"><?= htmlspecialchars($current_admin['nama_lengkap'] ?? $admin_name); ?></h3>
+                  <span class="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 text-[10px] font-extrabold uppercase">Super Admin</span>
+                </div>
+                <p id="adminProfileEmailPreview" class="text-xs text-indigo-200 mt-1"><?= htmlspecialchars($current_admin['email'] ?? $admin_email); ?></p>
+              </div>
             </div>
-            <button type="submit" class="px-6 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-md">Simpan Perubahan</button>
+            <div class="text-left sm:text-right">
+              <p class="text-[10px] uppercase tracking-wider text-indigo-300 font-bold">ID Akun Admin</p>
+              <p id="adminProfileIdPreview" class="text-sm font-extrabold font-mono text-white">#<?= intval($current_admin['id'] ?? 1); ?></p>
+            </div>
+          </div>
+
+          <form method="POST" action="admin-dashboard.php" class="space-y-5">
+            <input type="hidden" name="action_update_admin" value="1">
+            <input type="hidden" name="selected_admin_id" id="selectedAdminIdInput" value="<?= intval($current_admin['id'] ?? 0); ?>">
+
+            <?php if (count($admins_list) > 0): ?>
+              <div class="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-2">
+                <label class="block text-xs font-extrabold text-slate-700 uppercase">Pilih Akun Identitas Administrator</label>
+                <select id="adminAccountSelector" onchange="fillAdminProfileForm(this)" class="input-studio bg-white font-bold text-xs">
+                  <?php foreach ($admins_list as $adm_item): ?>
+                    <?php
+                      $is_sel = ($current_admin && intval($adm_item['id']) === intval($current_admin['id']));
+                    ?>
+                    <option value="<?= intval($adm_item['id']); ?>"
+                            data-name="<?= htmlspecialchars($adm_item['nama_lengkap'] ?? ''); ?>"
+                            data-email="<?= htmlspecialchars($adm_item['email'] ?? ''); ?>"
+                            data-whatsapp="<?= htmlspecialchars($adm_item['whatsapp'] ?? ''); ?>"
+                            data-alamat="<?= htmlspecialchars($adm_item['alamat'] ?? ''); ?>"
+                            <?= $is_sel ? 'selected' : ''; ?>>
+                      #<?= intval($adm_item['id']); ?> — <?= htmlspecialchars($adm_item['nama_lengkap']); ?> (<?= htmlspecialchars($adm_item['email']); ?>)
+                    </option>
+                  <?php endforeach; ?>
+                </select>
+              </div>
+            <?php endif; ?>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label class="block text-xs font-bold text-slate-700 uppercase mb-1.5">Nama Administrator</label>
+                <input type="text" name="admin_name" id="adminNameField" value="<?= htmlspecialchars($current_admin['nama_lengkap'] ?? $admin_name); ?>" class="input-studio" required>
+              </div>
+
+              <div>
+                <label class="block text-xs font-bold text-slate-700 uppercase mb-1.5">Email Administrator</label>
+                <input type="email" name="admin_email" id="adminEmailField" value="<?= htmlspecialchars($current_admin['email'] ?? $admin_email); ?>" class="input-studio" required>
+              </div>
+
+              <div>
+                <label class="block text-xs font-bold text-slate-700 uppercase mb-1.5">Nomor Telepon / WhatsApp</label>
+                <input type="tel" name="admin_whatsapp" id="adminWhatsappField" value="<?= htmlspecialchars($current_admin['whatsapp'] ?? ''); ?>" placeholder="081234567890" class="input-studio">
+              </div>
+
+              <div>
+                <label class="block text-xs font-bold text-slate-700 uppercase mb-1.5">Peran / Hak Akses</label>
+                <input type="text" value="Administrator Utama (Super Admin)" class="input-studio bg-slate-50 text-slate-500 font-bold" readonly>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label class="block text-xs font-bold text-slate-700 uppercase mb-1.5">Alamat / Kantor Operasional</label>
+                <input type="text" name="admin_alamat" id="adminAlamatField" value="<?= htmlspecialchars($current_admin['alamat'] ?? ''); ?>" placeholder="Contoh: Makassar, Sulawesi Selatan" class="input-studio">
+              </div>
+
+              <div>
+                <label class="block text-xs font-bold text-slate-700 uppercase mb-1.5">Kata Sandi Baru (Opsional)</label>
+                <input type="password" name="admin_new_password" placeholder="Kosongkan jika tidak ingin mengganti sandi" class="input-studio">
+              </div>
+            </div>
+
+            <div class="pt-2 flex justify-end">
+              <button type="submit" class="px-6 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-md flex items-center gap-2 transition-all">
+                <span class="material-symbols-outlined text-[18px]">save</span>
+                <span>Simpan Identitas Profil</span>
+              </button>
+            </div>
           </form>
 
           <div class="pt-6 border-t border-slate-100 space-y-4">
-            <h3 class="text-sm font-extrabold text-slate-900 uppercase">Riwayat Log Aktivitas Admin</h3>
-            <div class="space-y-2 max-h-60 overflow-y-auto pr-2">
+            <div class="flex items-center justify-between">
+              <h3 class="text-sm font-extrabold text-slate-900 uppercase">Riwayat Log Aktivitas Admin</h3>
+              <span class="text-[11px] font-semibold text-slate-400">15 aktivitas terbaru</span>
+            </div>
+            <div class="space-y-2.5 max-h-64 overflow-y-auto pr-1">
               <?php while ($log = mysqli_fetch_assoc($logs_res)): ?>
-                <div class="p-3 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between text-xs">
-                  <span class="font-bold text-slate-800"><?= htmlspecialchars($log['aktivitas']); ?></span>
-                  <span class="text-[10px] text-slate-400"><?= $log['waktu']; ?></span>
+                <div class="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80 flex items-center justify-between gap-3 text-xs">
+                  <div class="flex items-center gap-2.5 min-w-0">
+                    <span class="w-2 h-2 rounded-full bg-indigo-500 flex-shrink-0"></span>
+                    <span class="font-bold text-slate-800 truncate"><?= htmlspecialchars($log['aktivitas']); ?></span>
+                  </div>
+                  <span class="text-[11px] font-mono text-slate-400 flex-shrink-0"><?= htmlspecialchars($log['waktu']); ?></span>
                 </div>
               <?php endwhile; ?>
             </div>
@@ -1093,12 +1668,103 @@ $articles_res = mysqli_query($conn, "SELECT * FROM articles ORDER BY id DESC");
     </div>
   </main>
 
+  <!-- MODAL POP-UP KONFIRMASI UPDATE STATUS PESANAN -->
+  <div id="orderStatusModal" class="fixed inset-0 z-50 hidden bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4" onclick="closeStatusUpdateModal(event)">
+    <div class="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-md w-full overflow-hidden" onclick="event.stopPropagation()">
+      <div class="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <div class="w-10 h-10 rounded-2xl bg-indigo-100 text-indigo-600 flex items-center justify-center">
+            <span class="material-symbols-outlined text-[22px]">sync_alt</span>
+          </div>
+          <div>
+            <h3 class="text-base font-extrabold text-slate-900">Konfirmasi Ubah Status</h3>
+            <p class="text-[11px] text-slate-500">Perbarui progres pesanan pelanggan</p>
+          </div>
+        </div>
+        <button type="button" onclick="closeStatusUpdateModal()" class="p-1.5 rounded-xl hover:bg-slate-100 text-slate-500">
+          <span class="material-symbols-outlined text-[20px]">close</span>
+        </button>
+      </div>
+
+      <form method="POST" action="admin-dashboard.php" class="p-6 space-y-5">
+        <input type="hidden" name="action_update_order_status" value="1">
+        <input type="hidden" name="order_id" id="modalStatusOrderPkId" value="">
+
+        <div class="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-2 text-xs">
+          <div class="flex justify-between gap-2">
+            <span class="text-slate-500">ID Pesanan</span>
+            <span id="modalStatusOrderCode" class="font-extrabold text-slate-900">-</span>
+          </div>
+          <div class="flex justify-between gap-2">
+            <span class="text-slate-500">Klien / Usaha</span>
+            <span id="modalStatusClientName" class="font-bold text-slate-800 text-right">-</span>
+          </div>
+          <div class="flex justify-between gap-2">
+            <span class="text-slate-500">Layanan</span>
+            <span id="modalStatusServiceName" class="font-bold text-indigo-600 text-right">-</span>
+          </div>
+          <div class="flex justify-between gap-2 pt-2 border-t border-slate-200">
+            <span class="text-slate-500">Status Saat Ini</span>
+            <span id="modalStatusCurrent" class="font-extrabold text-slate-800">-</span>
+          </div>
+        </div>
+
+        <div class="space-y-2">
+          <label class="block text-xs font-extrabold text-slate-700 uppercase">Pilih Status Baru</label>
+          <div class="grid grid-cols-1 gap-2">
+            <label class="flex items-center justify-between p-3 rounded-xl border border-slate-200 hover:border-amber-400 cursor-pointer has-[:checked]:border-amber-500 has-[:checked]:bg-amber-50/60 transition-all">
+              <span class="flex items-center gap-2.5 text-xs font-bold text-slate-800">
+                <span class="w-2.5 h-2.5 rounded-full bg-amber-500"></span> Menunggu Pembayaran
+              </span>
+              <input type="radio" name="order_status" value="Menunggu Pembayaran" class="accent-amber-600">
+            </label>
+            <label class="flex items-center justify-between p-3 rounded-xl border border-slate-200 hover:border-orange-400 cursor-pointer has-[:checked]:border-orange-500 has-[:checked]:bg-orange-50/60 transition-all">
+              <span class="flex items-center gap-2.5 text-xs font-bold text-slate-800">
+                <span class="w-2.5 h-2.5 rounded-full bg-orange-500"></span> Menunggu Konfirmasi
+              </span>
+              <input type="radio" name="order_status" value="Menunggu Konfirmasi" class="accent-orange-600">
+            </label>
+            <label class="flex items-center justify-between p-3 rounded-xl border border-slate-200 hover:border-blue-400 cursor-pointer has-[:checked]:border-blue-500 has-[:checked]:bg-blue-50/60 transition-all">
+              <span class="flex items-center gap-2.5 text-xs font-bold text-slate-800">
+                <span class="w-2.5 h-2.5 rounded-full bg-blue-500"></span> Diproses
+              </span>
+              <input type="radio" name="order_status" value="Diproses" class="accent-blue-600">
+            </label>
+            <label class="flex items-center justify-between p-3 rounded-xl border border-slate-200 hover:border-emerald-400 cursor-pointer has-[:checked]:border-emerald-500 has-[:checked]:bg-emerald-50/60 transition-all">
+              <span class="flex items-center gap-2.5 text-xs font-bold text-slate-800">
+                <span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span> Selesai
+              </span>
+              <input type="radio" name="order_status" value="Selesai" class="accent-emerald-600">
+            </label>
+            <label class="flex items-center justify-between p-3 rounded-xl border border-slate-200 hover:border-rose-400 cursor-pointer has-[:checked]:border-rose-500 has-[:checked]:bg-rose-50/60 transition-all">
+              <span class="flex items-center gap-2.5 text-xs font-bold text-slate-800">
+                <span class="w-2.5 h-2.5 rounded-full bg-rose-500"></span> Dibatalkan
+              </span>
+              <input type="radio" name="order_status" value="Dibatalkan" class="accent-rose-600">
+            </label>
+          </div>
+        </div>
+
+        <div class="pt-2 flex items-center justify-end gap-2.5">
+          <button type="button" onclick="closeStatusUpdateModal()" class="px-4 py-2.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 font-bold text-xs">
+            Batal
+          </button>
+          <button type="submit" class="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-md flex items-center gap-1.5">
+            <span class="material-symbols-outlined text-[16px]">check_circle</span>
+            <span>Konfirmasi & Simpan</span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <footer class="bg-white border-t border-slate-200 py-6 text-center text-xs text-slate-400">
     © 2026 Marketiva Digital Agency. Control Panel Administrator.
   </footer>
 
   <script>
     let activeOrderId = null;
+    let currentOrderStatusFilter = 'all';
 
     function switchAdminTab(tabName) {
       document.getElementById('adminTabServices').classList.add('hidden');
@@ -1160,10 +1826,114 @@ $articles_res = mysqli_query($conn, "SELECT * FROM articles ORDER BY id DESC");
       }
     }
 
+    function setOrderStatusFilter(statusFilter) {
+      currentOrderStatusFilter = statusFilter;
+      const pills = document.querySelectorAll('.order-filter-pill');
+      pills.forEach(btn => {
+        const badge = btn.querySelector('span:last-child');
+        if (btn.getAttribute('data-filter') === statusFilter) {
+          btn.className = "order-filter-pill px-3.5 py-2 rounded-xl text-xs font-extrabold bg-slate-900 text-white shadow-xs transition-all flex items-center gap-1.5";
+          if (badge) badge.className = "px-1.5 py-0.5 rounded-full text-[10px] bg-white/20 text-white";
+        } else {
+          btn.className = "order-filter-pill px-3.5 py-2 rounded-xl text-xs font-bold text-slate-600 hover:bg-white hover:text-slate-900 transition-all flex items-center gap-1.5";
+          if (badge) badge.className = "px-1.5 py-0.5 rounded-full text-[10px] bg-slate-200/80 text-slate-700";
+        }
+      });
+      applyOrderFilters();
+    }
+
+    function applyOrderFilters() {
+      const searchVal = (document.getElementById('orderSearchInput')?.value || '').toLowerCase().trim();
+      const rows = document.querySelectorAll('.order-data-row');
+      let visibleCount = 0;
+
+      rows.forEach(row => {
+        const rowStatus = row.getAttribute('data-status') || '';
+        const rowSearch = row.getAttribute('data-search') || '';
+        const matchStatus = (currentOrderStatusFilter === 'all') || (rowStatus.toLowerCase() === currentOrderStatusFilter.toLowerCase());
+        const matchSearch = !searchVal || rowSearch.includes(searchVal);
+
+        if (matchStatus && matchSearch) {
+          row.classList.remove('hidden');
+          visibleCount++;
+        } else {
+          row.classList.add('hidden');
+        }
+      });
+
+      const emptyRow = document.getElementById('ordersEmptyFilterRow');
+      if (emptyRow) {
+        if (visibleCount === 0 && rows.length > 0) {
+          emptyRow.classList.remove('hidden');
+        } else {
+          emptyRow.classList.add('hidden');
+        }
+      }
+    }
+
+    function openStatusUpdateModal(data) {
+      const kode = data.order_id ? data.order_id : ('#' + data.id);
+      const client = (data.nama_lengkap || 'Pelanggan') + (data.nama_usaha ? ' (' + data.nama_usaha + ')' : '');
+      const currentStatus = data.status || 'Menunggu Pembayaran';
+
+      document.getElementById('modalStatusOrderPkId').value = data.id;
+      document.getElementById('modalStatusOrderCode').textContent = kode;
+      document.getElementById('modalStatusClientName').textContent = client;
+      document.getElementById('modalStatusServiceName').textContent = data.nama_layanan || '-';
+      document.getElementById('modalStatusCurrent').textContent = currentStatus;
+
+      const radios = document.querySelectorAll('#orderStatusModal input[name="order_status"]');
+      radios.forEach(r => {
+        r.checked = (r.value.toLowerCase() === currentStatus.toLowerCase());
+      });
+
+      document.getElementById('orderStatusModal').classList.remove('hidden');
+    }
+
+    function closeStatusUpdateModal(event) {
+      if (!event || event.target.id === 'orderStatusModal') {
+        document.getElementById('orderStatusModal').classList.add('hidden');
+      }
+    }
+
+    function filterCustomerCards() {
+      const q = (document.getElementById('customerSearchInput')?.value || '').toLowerCase().trim();
+      const cards = document.querySelectorAll('.customer-kpi-card');
+      cards.forEach(card => {
+        const hay = card.getAttribute('data-search') || '';
+        if (!q || hay.includes(q)) {
+          card.classList.remove('hidden');
+        } else {
+          card.classList.add('hidden');
+        }
+      });
+    }
+
+    function fillAdminProfileForm(selectEl) {
+      const opt = selectEl.options[selectEl.selectedIndex];
+      if (!opt) return;
+      const idVal     = opt.value;
+      const nameVal   = opt.getAttribute('data-name') || '';
+      const emailVal  = opt.getAttribute('data-email') || '';
+      const waVal     = opt.getAttribute('data-whatsapp') || '';
+      const alamatVal = opt.getAttribute('data-alamat') || '';
+
+      document.getElementById('selectedAdminIdInput').value = idVal;
+      document.getElementById('adminNameField').value       = nameVal;
+      document.getElementById('adminEmailField').value      = emailVal;
+      document.getElementById('adminWhatsappField').value   = waVal;
+      document.getElementById('adminAlamatField').value     = alamatVal;
+
+      document.getElementById('adminProfileIdPreview').textContent     = '#' + idVal;
+      document.getElementById('adminProfileNamePreview').textContent   = nameVal || 'Admin Marketiva';
+      document.getElementById('adminProfileEmailPreview').textContent  = emailVal || '-';
+      document.getElementById('adminProfileAvatarPreview').textContent = (nameVal ? nameVal.charAt(0).toUpperCase() : 'A');
+    }
+
     function openOrderDetail(data) {
       activeOrderId = data.id;
-      const kode = data.order_id ? data.order_id : ('#' + data.id);
-      const harga = Number(data.harga || 0).toLocaleString('id-ID');
+      const kode   = data.order_id ? data.order_id : ('#' + data.id);
+      const harga  = Number(data.harga || 0).toLocaleString('id-ID');
       const status = data.status || 'Menunggu Konfirmasi';
 
       document.getElementById('detailOrderTitle').innerText = 'Detail Pesanan ' + kode;
@@ -1251,6 +2021,10 @@ $articles_res = mysqli_query($conn, "SELECT * FROM articles ORDER BY id DESC");
         }
       }
     }
+
+    window.addEventListener('DOMContentLoaded', function() {
+      switchAdminTab(<?= json_encode($initial_tab); ?>);
+    });
   </script>
 </body>
 </html>

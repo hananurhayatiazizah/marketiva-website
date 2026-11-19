@@ -1,4 +1,7 @@
 <?php
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
 require_once 'koneksi.php';
 
 // Ambil semua data layanan digabung dengan kategori
@@ -22,10 +25,14 @@ if (empty($bundling_items)) {
 }
 
 // Status Sesi Login
-$is_logged_in = isset($_SESSION['user']);
-$user_name = $_SESSION['user'] ?? '';
-$user_role = $_SESSION['role'] ?? 'user';
-$dashboard_link = ($user_role === 'admin') ? 'admin-dashboard.php' : 'user-dashboard.php';
+$is_logged_in   = isset($_SESSION['user']);
+$user_name      = trim((string)($_SESSION['user'] ?? ''));
+$user_role      = $_SESSION['role'] ?? 'user';
+$user_email_hdr = $_SESSION['email'] ?? '';
+$is_admin_hdr   = ($user_role === 'admin');
+$dashboard_link = $is_admin_hdr ? 'admin-dashboard.php' : 'user-dashboard.php';
+$role_label_hdr = $is_admin_hdr ? 'Administrator' : 'Member UMKM';
+$avatar_char    = ($is_logged_in && $user_name !== '') ? strtoupper(mb_substr($user_name, 0, 1)) : 'M';
 ?>
 <!DOCTYPE html>
 <html lang="id">
@@ -40,6 +47,95 @@ $dashboard_link = ($user_role === 'admin') ? 'admin-dashboard.php' : 'user-dashb
     body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #F8FAFC; }
     .card-studio { background-color: #FFFFFF; border-radius: 1.25rem; border: 1px solid #E2E8F0; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.02); transition: all 0.3s ease; }
     .card-studio:hover { transform: translateY(-3px); box-shadow: 0 12px 20px -5px rgba(225, 29, 72, 0.08); border-color: #FDA4AF; }
+
+    /* Modern Profile Pill & Dropdown */
+    .profile-pill-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.65rem;
+      padding: 0.35rem 0.75rem 0.35rem 0.4rem;
+      border-radius: 9999px;
+      background: #FFFFFF;
+      border: 1.5px solid #E2E8F0;
+      box-shadow: 0 4px 14px -4px rgba(15, 23, 42, 0.08);
+      transition: all 0.2s ease;
+      cursor: pointer;
+    }
+    .profile-pill-btn:hover,
+    .profile-pill-btn[aria-expanded="true"] {
+      border-color: #FDA4AF;
+      background: #FFF1F2;
+      box-shadow: 0 8px 20px -6px rgba(225, 29, 72, 0.18);
+    }
+    .profile-avatar-ring {
+      width: 36px;
+      height: 36px;
+      border-radius: 9999px;
+      background: linear-gradient(135deg, #E11D48 0%, #EC4899 55%, #2563EB 100%);
+      color: #FFFFFF;
+      font-weight: 800;
+      font-size: 0.85rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      flex-shrink: 0;
+    }
+    .profile-online-dot {
+      position: absolute;
+      bottom: -1px;
+      right: -1px;
+      width: 10px;
+      height: 10px;
+      border-radius: 9999px;
+      background: #10B981;
+      border: 2px solid #FFFFFF;
+    }
+    .profile-dropdown-menu {
+      position: absolute;
+      right: 0;
+      top: calc(100% + 0.65rem);
+      width: 268px;
+      background: #FFFFFF;
+      border: 1.5px solid #E2E8F0;
+      border-radius: 1.25rem;
+      box-shadow: 0 20px 40px -12px rgba(15, 23, 42, 0.16);
+      padding: 0.5rem;
+      z-index: 80;
+      transform-origin: top right;
+      transition: opacity 0.18s ease, transform 0.18s ease;
+    }
+    .profile-dropdown-menu.is-closed {
+      opacity: 0;
+      transform: translateY(-6px) scale(0.97);
+      pointer-events: none;
+    }
+    .profile-dropdown-menu.is-open {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+      pointer-events: auto;
+    }
+    .profile-menu-item {
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+      width: 100%;
+      padding: 0.65rem 0.75rem;
+      border-radius: 0.85rem;
+      font-size: 0.78rem;
+      font-weight: 700;
+      color: #334155;
+      text-decoration: none;
+      transition: all 0.15s ease;
+    }
+    .profile-menu-item:hover {
+      background: #F8FAFC;
+      color: #0F172A;
+    }
+    .profile-menu-item.danger:hover {
+      background: #FFF1F2;
+      color: #E11D48;
+    }
   </style>
 </head>
 <body class="min-h-screen flex flex-col justify-between">
@@ -83,20 +179,68 @@ $dashboard_link = ($user_role === 'admin') ? 'admin-dashboard.php' : 'user-dashb
         </a>
       </nav>
       
-      <div class="flex items-center gap-4">
+      <div class="flex items-center gap-3">
         <?php if ($is_logged_in): ?>
-          <a href="<?= $dashboard_link; ?>" class="flex items-center gap-3 bg-slate-50 border border-slate-200 px-4 py-2 rounded-2xl hover:bg-slate-100 transition-all">
-            <div class="w-8 h-8 rounded-xl bg-rose-100 text-[#E11D48] flex items-center justify-center font-bold text-xs">
-              <?= strtoupper(substr($user_name, 0, 1)); ?>
+          <div class="relative" id="profileDropdownWrapper">
+            <button type="button"
+                    id="profileTriggerBtn"
+                    aria-expanded="false"
+                    aria-controls="profileDropdownPanel"
+                    onclick="toggleProfileDropdown(event)"
+                    class="profile-pill-btn">
+              <div class="profile-avatar-ring">
+                <span><?= htmlspecialchars($avatar_char); ?></span>
+                <span class="profile-online-dot"></span>
+              </div>
+              <div class="hidden sm:flex flex-col items-start text-left leading-tight pr-1">
+                <span class="text-xs font-extrabold text-slate-900 max-w-[140px] truncate">
+                  <?= htmlspecialchars($user_name); ?>
+                </span>
+                <span class="text-[10px] font-bold <?= $is_admin_hdr ? 'text-rose-600' : 'text-blue-600'; ?>">
+                  <?= htmlspecialchars($role_label_hdr); ?>
+                </span>
+              </div>
+              <span id="profileChevronIcon" class="material-symbols-outlined text-[18px] text-slate-500 transition-transform duration-200">
+                expand_more
+              </span>
+            </button>
+
+            <div id="profileDropdownPanel" class="profile-dropdown-menu is-closed" role="menu">
+              <div class="px-3 py-2.5 rounded-2xl bg-slate-50 border border-slate-100 mb-1.5">
+                <div class="flex items-center justify-between gap-2">
+                  <span class="text-xs font-extrabold text-slate-900 truncate"><?= htmlspecialchars($user_name); ?></span>
+                  <span class="px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase <?= $is_admin_hdr ? 'bg-rose-100 text-rose-700' : 'bg-blue-100 text-blue-700'; ?>">
+                    <?= $is_admin_hdr ? 'PRO ADMIN' : 'UMKM'; ?>
+                  </span>
+                </div>
+                <?php if (!empty($user_email_hdr)): ?>
+                  <p class="text-[11px] text-slate-500 truncate mt-0.5"><?= htmlspecialchars($user_email_hdr); ?></p>
+                <?php endif; ?>
+              </div>
+
+              <a href="<?= htmlspecialchars($dashboard_link); ?>" class="profile-menu-item" role="menuitem">
+                <span class="material-symbols-outlined text-[18px] text-rose-600">space_dashboard</span>
+                <span><?= $is_admin_hdr ? 'Admin Control Panel' : 'Dashboard Akun'; ?></span>
+              </a>
+
+              <a href="catalog.php" class="profile-menu-item" role="menuitem">
+                <span class="material-symbols-outlined text-[18px] text-blue-600">storefront</span>
+                <span>Jelajah Katalog Layanan</span>
+              </a>
+
+              <a href="<?= htmlspecialchars($dashboard_link); ?>?tab=profile" class="profile-menu-item" role="menuitem">
+                <span class="material-symbols-outlined text-[18px] text-emerald-600">manage_accounts</span>
+                <span>Pengaturan Profil</span>
+              </a>
+
+              <div class="my-1 border-t border-slate-100"></div>
+
+              <a href="login.php?action=logout" class="profile-menu-item danger" role="menuitem">
+                <span class="material-symbols-outlined text-[18px] text-rose-500">logout</span>
+                <span>Keluar dari Akun</span>
+              </a>
             </div>
-            <div class="text-left hidden sm:block">
-              <p class="text-[10px] text-slate-400 font-bold uppercase"><?= ($user_role === 'admin') ? 'Administrator' : 'Pelanggan'; ?></p>
-              <p class="text-xs font-extrabold text-slate-800"><?= htmlspecialchars($user_name); ?></p>
-            </div>
-          </a>
-          <a href="login.php?action=logout" class="p-2.5 rounded-xl bg-rose-50 text-rose-600 hover:bg-rose-100 transition-all" title="Keluar">
-            <span class="material-symbols-outlined text-[18px]">logout</span>
-          </a>
+          </div>
         <?php else: ?>
           <a href="login.php" class="px-5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs shadow-md transition-all flex items-center gap-1.5">
             <span class="material-symbols-outlined text-[16px]">login</span>
@@ -219,5 +363,49 @@ $dashboard_link = ($user_role === 'admin') ? 'admin-dashboard.php' : 'user-dashb
     © 2026 Marketiva Digital Agency.
   </footer>
 
+  <script>
+    function toggleProfileDropdown(event) {
+      event.stopPropagation();
+      const btn = document.getElementById('profileTriggerBtn');
+      const panel = document.getElementById('profileDropdownPanel');
+      const chevron = document.getElementById('profileChevronIcon');
+      if (!btn || !panel) return;
+
+      const isOpen = panel.classList.contains('is-open');
+      if (isOpen) {
+        closeProfileDropdown();
+      } else {
+        panel.classList.remove('is-closed');
+        panel.classList.add('is-open');
+        btn.setAttribute('aria-expanded', 'true');
+        if (chevron) chevron.style.transform = 'rotate(180deg)';
+      }
+    }
+
+    function closeProfileDropdown() {
+      const btn = document.getElementById('profileTriggerBtn');
+      const panel = document.getElementById('profileDropdownPanel');
+      const chevron = document.getElementById('profileChevronIcon');
+      if (!btn || !panel) return;
+
+      panel.classList.remove('is-open');
+      panel.classList.add('is-closed');
+      btn.setAttribute('aria-expanded', 'false');
+      if (chevron) chevron.style.transform = 'rotate(0deg)';
+    }
+
+    document.addEventListener('click', function(event) {
+      const wrapper = document.getElementById('profileDropdownWrapper');
+      if (wrapper && !wrapper.contains(event.target)) {
+        closeProfileDropdown();
+      }
+    });
+
+    document.addEventListener('keydown', function(event) {
+      if (event.key === 'Escape') {
+        closeProfileDropdown();
+      }
+    });
+  </script>
 </body>
 </html>

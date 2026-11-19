@@ -20,6 +20,16 @@ if ($result_articles) {
         $articles[] = $row;
     }
 }
+
+// Data sesi aktif untuk tampilan profil kanan atas
+$is_logged_in  = isset($_SESSION['user']);
+$session_name  = $is_logged_in ? trim((string)$_SESSION['user']) : '';
+$session_role  = $is_logged_in ? ($_SESSION['role'] ?? 'user') : '';
+$session_mail  = $is_logged_in ? ($_SESSION['email'] ?? '') : '';
+$is_admin_acc  = ($session_role === 'admin');
+$dashboard_url = $is_admin_acc ? 'admin-dashboard.php' : 'user-dashboard.php';
+$role_label    = $is_admin_acc ? 'Administrator' : 'Member UMKM';
+$avatar_char   = ($is_logged_in && $session_name !== '') ? strtoupper(mb_substr($session_name, 0, 1)) : 'M';
 ?>
 <!DOCTYPE html>
 <html lang="id" class="scroll-smooth">
@@ -111,6 +121,104 @@ if ($result_articles) {
     .btn-outline-playful:hover {
       border-color: #3B82F6;
       color: var(--primary-blue);
+    }
+
+    /* Modern Profile Pill & Dropdown */
+    .profile-pill-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.65rem;
+      padding: 0.35rem 0.75rem 0.35rem 0.4rem;
+      border-radius: 9999px;
+      background: #FFFFFF;
+      border: 1.5px solid #E2E8F0;
+      box-shadow: 0 4px 14px -4px rgba(15, 23, 42, 0.08);
+      transition: all 0.2s ease;
+      cursor: pointer;
+    }
+
+    .profile-pill-btn:hover,
+    .profile-pill-btn[aria-expanded="true"] {
+      border-color: #FDA4AF;
+      background: #FFF1F2;
+      box-shadow: 0 8px 20px -6px rgba(225, 29, 72, 0.18);
+    }
+
+    .profile-avatar-ring {
+      width: 36px;
+      height: 36px;
+      border-radius: 9999px;
+      background: linear-gradient(135deg, #E11D48 0%, #EC4899 55%, #2563EB 100%);
+      color: #FFFFFF;
+      font-weight: 800;
+      font-size: 0.85rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      flex-shrink: 0;
+    }
+
+    .profile-online-dot {
+      position: absolute;
+      bottom: -1px;
+      right: -1px;
+      width: 10px;
+      height: 10px;
+      border-radius: 9999px;
+      background: #10B981;
+      border: 2px solid #FFFFFF;
+    }
+
+    .profile-dropdown-menu {
+      position: absolute;
+      right: 0;
+      top: calc(100% + 0.65rem);
+      width: 268px;
+      background: #FFFFFF;
+      border: 1.5px solid #E2E8F0;
+      border-radius: 1.25rem;
+      box-shadow: 0 20px 40px -12px rgba(15, 23, 42, 0.16);
+      padding: 0.5rem;
+      z-index: 80;
+      transform-origin: top right;
+      transition: opacity 0.18s ease, transform 0.18s ease;
+    }
+
+    .profile-dropdown-menu.is-closed {
+      opacity: 0;
+      transform: translateY(-6px) scale(0.97);
+      pointer-events: none;
+    }
+
+    .profile-dropdown-menu.is-open {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+      pointer-events: auto;
+    }
+
+    .profile-menu-item {
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+      width: 100%;
+      padding: 0.65rem 0.75rem;
+      border-radius: 0.85rem;
+      font-size: 0.78rem;
+      font-weight: 700;
+      color: #334155;
+      text-decoration: none;
+      transition: all 0.15s ease;
+    }
+
+    .profile-menu-item:hover {
+      background: #F8FAFC;
+      color: #0F172A;
+    }
+
+    .profile-menu-item.danger:hover {
+      background: #FFF1F2;
+      color: #E11D48;
     }
 
     .badge-creative {
@@ -208,14 +316,69 @@ if ($result_articles) {
         </a>
       </nav>
 
-      <!-- DINAMIS: TOMBOL MASUK / AKUN -->
+      <!-- PROFIL INTERAKTIF KANAN ATAS (TANPA KATA HALO) -->
       <div class="flex items-center gap-3">
-        <?php if (isset($_SESSION['user'])): ?>
-          <?php $dashboard_url = ($_SESSION['role'] === 'admin') ? 'admin-dashboard.php' : 'user-dashboard.php'; ?>
-          <a href="<?= $dashboard_url ?>" class="btn-primary-hero text-xs py-2 px-4 flex items-center gap-1.5">
-            <span class="material-symbols-outlined text-[18px]">dashboard</span>
-            <span>Halo, <?= htmlspecialchars($_SESSION['user']); ?></span>
-          </a>
+        <?php if ($is_logged_in): ?>
+          <div class="relative" id="profileDropdownWrapper">
+            <button type="button"
+                    id="profileTriggerBtn"
+                    aria-expanded="false"
+                    aria-controls="profileDropdownPanel"
+                    onclick="toggleProfileDropdown(event)"
+                    class="profile-pill-btn">
+              <div class="profile-avatar-ring">
+                <span><?= htmlspecialchars($avatar_char); ?></span>
+                <span class="profile-online-dot"></span>
+              </div>
+              <div class="hidden sm:flex flex-col items-start text-left leading-tight pr-1">
+                <span class="text-xs font-extrabold text-slate-900 max-w-[140px] truncate">
+                  <?= htmlspecialchars($session_name); ?>
+                </span>
+                <span class="text-[10px] font-bold <?= $is_admin_acc ? 'text-rose-600' : 'text-blue-600'; ?>">
+                  <?= htmlspecialchars($role_label); ?>
+                </span>
+              </div>
+              <span id="profileChevronIcon" class="material-symbols-outlined text-[18px] text-slate-500 transition-transform duration-200">
+                expand_more
+              </span>
+            </button>
+
+            <div id="profileDropdownPanel" class="profile-dropdown-menu is-closed" role="menu">
+              <div class="px-3 py-2.5 rounded-2xl bg-slate-50 border border-slate-100 mb-1.5">
+                <div class="flex items-center justify-between gap-2">
+                  <span class="text-xs font-extrabold text-slate-900 truncate"><?= htmlspecialchars($session_name); ?></span>
+                  <span class="px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase <?= $is_admin_acc ? 'bg-rose-100 text-rose-700' : 'bg-blue-100 text-blue-700'; ?>">
+                    <?= $is_admin_acc ? 'PRO ADMIN' : 'UMKM'; ?>
+                  </span>
+                </div>
+                <?php if (!empty($session_mail)): ?>
+                  <p class="text-[11px] text-slate-500 truncate mt-0.5"><?= htmlspecialchars($session_mail); ?></p>
+                <?php endif; ?>
+              </div>
+
+              <a href="<?= htmlspecialchars($dashboard_url); ?>" class="profile-menu-item" role="menuitem">
+                <span class="material-symbols-outlined text-[18px] text-rose-600">space_dashboard</span>
+                <span><?= $is_admin_acc ? 'Admin Control Panel' : 'Dashboard Akun'; ?></span>
+              </a>
+
+              <a href="catalog.php" class="profile-menu-item" role="menuitem">
+                <span class="material-symbols-outlined text-[18px] text-blue-600">storefront</span>
+                <span>Jelajah Katalog Layanan</span>
+              </a>
+
+              <a href="<?= htmlspecialchars($dashboard_url); ?>?tab=profile" class="profile-menu-item" role="menuitem">
+                <span class="material-symbols-outlined text-[18px] text-emerald-600">manage_accounts</span>
+                <span>Pengaturan Profil</span>
+              </a>
+
+              <div class="my-1 border-t border-slate-100"></div>
+
+              <a href="login.php?action=logout" class="profile-menu-item danger" role="menuitem">
+                <span class="material-symbols-outlined text-[18px] text-rose-500">logout</span>
+                <span>Keluar dari Akun</span>
+              </a>
+            </div>
+          </div>
         <?php else: ?>
           <a href="login.php" class="btn-outline-playful text-xs py-2 px-4 flex items-center gap-1.5 border-slate-200 hover:border-rose-300">
             <span class="material-symbols-outlined text-[18px] text-[#E11D48]">account_circle</span>
@@ -389,5 +552,49 @@ if ($result_articles) {
     </div>
   </footer>
 
+  <script>
+    function toggleProfileDropdown(event) {
+      event.stopPropagation();
+      const btn = document.getElementById('profileTriggerBtn');
+      const panel = document.getElementById('profileDropdownPanel');
+      const chevron = document.getElementById('profileChevronIcon');
+      if (!btn || !panel) return;
+
+      const isOpen = panel.classList.contains('is-open');
+      if (isOpen) {
+        closeProfileDropdown();
+      } else {
+        panel.classList.remove('is-closed');
+        panel.classList.add('is-open');
+        btn.setAttribute('aria-expanded', 'true');
+        if (chevron) chevron.style.transform = 'rotate(180deg)';
+      }
+    }
+
+    function closeProfileDropdown() {
+      const btn = document.getElementById('profileTriggerBtn');
+      const panel = document.getElementById('profileDropdownPanel');
+      const chevron = document.getElementById('profileChevronIcon');
+      if (!btn || !panel) return;
+
+      panel.classList.remove('is-open');
+      panel.classList.add('is-closed');
+      btn.setAttribute('aria-expanded', 'false');
+      if (chevron) chevron.style.transform = 'rotate(0deg)';
+    }
+
+    document.addEventListener('click', function(event) {
+      const wrapper = document.getElementById('profileDropdownWrapper');
+      if (wrapper && !wrapper.contains(event.target)) {
+        closeProfileDropdown();
+      }
+    });
+
+    document.addEventListener('keydown', function(event) {
+      if (event.key === 'Escape') {
+        closeProfileDropdown();
+      }
+    });
+  </script>
 </body>
 </html>
